@@ -5,7 +5,7 @@
 **A local dashboard for all the project folders on your Mac.**
 Зайди один раз — и увидь все свои проекты сразу: код, языки, git-статус, заметки.
 
-![Dashhy — light](docs/screenshot-light.jpeg)
+![Dashhy — light](docs/screenshot-light-v2.jpeg)
 
 [Features](#-features) · [Quick start](#-quick-start) · [Install guide](INSTALL.md) · [Security](#-security--privacy) · [Возможности](#-возможности-ru) · [Установка](INSTALL.md)
 
@@ -144,7 +144,7 @@ Full details and the audit summary are in **[SECURITY.md](SECURITY.md)**.
 компьютере**: крошечный бэкенд на Python (только стандартная библиотека) отдаёт
 веб-интерфейс в нативном окне macOS. Без аккаунтов, облака и телеметрии.
 
-![Dashhy — тёмная тема](docs/screenshot-dark.jpeg)
+![Dashhy — тёмная тема](docs/screenshot-dark-v2.jpeg)
 
 ### Возможности
 
