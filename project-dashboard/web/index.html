@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashhy</title>
+  <link rel="stylesheet" href="golos.css" />
+  <link rel="stylesheet" href="mi.css" />
+</head>
+<body data-theme="dark">
+  <div class="mi-root">
+
+    <!-- ───────── RAIL ───────── -->
+    <aside class="mi-rail">
+      <nav class="mi-railnav">
+        <button class="mi-railbtn on" data-filter="" data-label="Dashhy" title="Dashhy">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+          <span class="mi-railbadge" id="nav-count">0</span>
+        </button>
+        <button class="mi-railbtn" data-filter="running" data-label="Активные" title="Активные">
+          <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        </button>
+        <button class="mi-railbtn" data-filter="complete" data-label="Завершённые" title="Завершённые">
+          <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </nav>
+      <div class="mi-railspace"></div>
+    </aside>
+
+    <!-- ───────── BODY ───────── -->
+    <div class="mi-body">
+      <header class="mi-top">
+        <div class="mi-top-title">
+          <h1 id="screen-title">Dashhy</h1>
+          <div class="mi-date" id="crumb-date"></div>
+        </div>
+        <label class="mi-search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="search" type="text" placeholder="Поиск по проектам…" />
+        </label>
+        <div class="mi-top-right">
+          <select id="sort-sel" class="mi-sort" title="Сортировка">
+            <option value="recent">Недавние</option>
+            <option value="name">По имени</option>
+            <option value="size">По размеру</option>
+          </select>
+          <button class="mi-tbtn" id="theme-toggle" title="Тема">
+            <svg id="theme-icon" viewBox="0 0 24 24"></svg>
+          </button>
+          <button class="mi-tbtn" id="grant-btn" title="Доступ к папкам / найти проекты">
+            <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+          </button>
+          <button class="mi-tbtn" id="refresh-btn" title="Обновить все проекты">
+            <svg id="refresh-icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.2-8.6"/><path d="M21 3v6h-6"/></svg>
+          </button>
+          <button class="mi-add" id="add-btn">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            Добавить проект
+          </button>
+        </div>
+      </header>
+
+      <div class="pd-banner" id="pd-banner" hidden></div>
+
+      <section class="mi-bento" id="stats"></section>
+
+      <div class="mi-section-head">
+        <h2>Проекты</h2>
+        <span class="mi-count" id="proj-count"></span>
+      </div>
+      <section class="mi-grid" id="projects"></section>
+    </div>
+  </div>
+
+  <!-- file browser modal -->
+  <div class="pd-modal" id="files-modal" hidden>
+    <div class="pd-modal-card">
+      <div class="pd-modal-head">
+        <b id="fm-title">Файлы</b>
+        <span class="muted" id="fm-path"></span>
+        <button class="bn-ico" id="fm-close">
+          <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="pd-modal-body">
+        <div class="pd-tree" id="fm-tree"></div>
+        <pre class="pd-code" id="fm-code">← выберите файл</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="pd-tip" id="pd-tip" hidden></div>
+  <div class="pd-toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

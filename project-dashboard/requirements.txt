@@ -1,0 +1,8 @@
+# Dashhy dependencies
+#
+# Browser mode  (python3 server.py)  needs NOTHING beyond the Python 3 standard
+# library — there is nothing to install for it.
+#
+# Native macOS window  (python3 app.py)  needs pywebview, a thin wrapper around
+# the system WebKit. It pulls in the required pyobjc packages automatically.
+pywebview>=5.0,<7.0

@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────
+#  Dashhy — .gitignore
+#  Keeps build output, machine-specific config, personal data and
+#  third-party design references OUT of the public repository.
+# ─────────────────────────────────────────────────────────────
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# ── Virtual environments ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── PyInstaller build output (regenerate with build_app.sh) ──
+build/
+dist/
+*.spec.bak
+*.manifest
+
+# ── Built / bundled app ──
+*.app/
+
+# ── Editors / IDEs ──
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── AI / agent tooling ──
+.qwen/
+.playwright-mcp/
+.claude/
+*.orig
+
+# ── Local backups & scratch ──
+_old_launchers_backup/
+*.bak
+continue_work.py
+
+# ── Personal automation / launchers with machine-specific paths ──
+*.command
+
+# ── Design reference dumps / handoffs (keep the repo clean) ──
+*_Design/
+*_Design.zip
+design_handoff_*/
+
+# ── Dev screenshots / scratch images at the repo ROOT only ──
+# (docs/ images used by the README are intentionally kept)
+/*.png
+/*.jpeg
+/*.jpg
+
+# ── Logs ──
+*.log
