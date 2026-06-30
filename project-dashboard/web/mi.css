@@ -94,6 +94,14 @@ body {
 .mi-add svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2.4; }
 .mi-add:hover { filter: brightness(1.07); }
 
+/* green "Создать проект" — clones the project-starter template */
+.mi-create { height: 46px; padding: 0 15px; border-radius: 14px; border: none; cursor: pointer; font: inherit;
+  background: linear-gradient(150deg, #34c47a, #1f9d57); color: #fff; font-size: 13px; font-weight: 700;
+  box-shadow: 0 8px 22px rgba(31, 157, 87, .30); display: inline-flex; align-items: center; gap: 7px; }
+.mi-create svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+.mi-create:hover { filter: brightness(1.07); }
+.mi-create:disabled { opacity: .55; cursor: default; filter: none; }
+
 /* ---------- bento ---------- */
 .mi-bento { display: grid; grid-template-columns: 1.55fr 1fr 1fr; gap: 16px; margin-bottom: 38px; }
 .mi-tile { background: var(--tile); border: 1px solid var(--line); border-radius: 22px; }

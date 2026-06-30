@@ -39,6 +39,9 @@ rm -rf build dist "$APP_NAME.spec"
   --collect-all webview \
   --hidden-import WebKit --hidden-import Foundation \
   --hidden-import AppKit --hidden-import objc --hidden-import Quartz \
+  `# setuptools 82 ломает PyInstaller-хук pyi_rth_pkgres (appdirs / InvalidVersion`\
+  `#  на путях Frameworks) → app не стартует. Наш код их не юзает — исключаем.` \
+  --exclude-module pkg_resources --exclude-module setuptools \
   app.py >/tmp/pd-build.log 2>&1 || { echo "Сборка упала — см. /tmp/pd-build.log"; tail -20 /tmp/pd-build.log; exit 1; }
 
 BUILT="dist/$APP_NAME.app"

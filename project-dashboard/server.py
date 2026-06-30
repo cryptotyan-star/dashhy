@@ -19,6 +19,7 @@ import sys
 import uuid
 import subprocess
 import threading
+import time
 import webbrowser
 import urllib.request
 from datetime import datetime
@@ -59,8 +60,27 @@ SKIP_DIRS = {'node_modules', '.git', 'dist', 'build', '.next', '__pycache__',
 SKIP_FILES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock',
               'Cargo.lock', 'composer.lock', 'Gemfile.lock'}
 MAX_SCAN_ENTRIES = 50000   # hard cap so a giant tree can't hang/crash the scan
+# Last-resort relocate: when the cheap 1-level scan misses, walk the whole $HOME
+# tree to re-find a folder moved to an entirely new location. Bounded so a giant
+# home can't hang; cached briefly so one "Обновить" pass walks the tree once even
+# when many projects moved at the same time.
+DEEP_SCAN_MAX_DIRS = 200000
+_HOME_INDEX_TTL = 8.0      # seconds
 
 VALID_STATUS = {'idle', 'analyzing', 'running', 'stopped', 'complete'}
+
+# ── "Создать проект" — clone the project-starter template ──────
+# A green button in the UI copies this template to a fresh ~/Desktop/new project,
+# drops a VS Code folderOpen task that auto-launches `claude /onboard`, and opens
+# the folder in VS Code. Override the template via $DASH_STARTER if it ever moves.
+STARTER_DIR   = os.environ.get('DASH_STARTER', os.path.expanduser('~/Desktop/project-starter'))
+NEW_PROJ_BASE = os.path.expanduser('~/Desktop')   # where new projects land
+NEW_PROJ_NAME = 'new project'
+# heavy / per-clone junk we never want copied into a fresh project
+COPY_IGNORE = shutil.ignore_patterns(
+    '.git', 'node_modules', '.venv', 'venv', 'dist', 'build', '.next',
+    '__pycache__', '.cache', '.DS_Store',
+)
 
 # Credential / secret directories we refuse to index even though they live under
 # $HOME. The $HOME confinement alone is NOT a real boundary — ~/.ssh etc. are
@@ -81,11 +101,27 @@ def _is_sensitive_path(rp, home):
     return False
 
 
+def _dir_inode(path):
+    """Filesystem identity of a dir: "st_dev:st_ino", or None if unreadable.
+
+    macOS keeps this pair stable across an in-place rename/move, so it lets us
+    re-find a project folder after the user renames it. None for old records
+    that predate this field — they get one on their next successful scan.
+    """
+    try:
+        st = os.stat(path)
+        return f"{st.st_dev}:{st.st_ino}"
+    except OSError:
+        return None
+
+
 # ── Data store ────────────────────────────────────────────────
 class Store:
     def __init__(self):
         self.lock = threading.Lock()
         self.projects = {}
+        self._home_index = None        # cached deep-relocate candidate list
+        self._home_index_at = 0.0
         _migrate_data_dir()
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
@@ -140,6 +176,7 @@ class Store:
             'name': name, 'path': path,
             'status': 'idle', 'last_stage': 'Added',
             'files': 0, 'lines': 0, 'langs': {},
+            'inode': _dir_inode(os.path.realpath(path)),
             'created_at': now, 'updated_at': now, 'scanned_at': None,
         }
         with self.lock:
@@ -161,6 +198,187 @@ class Store:
                 return self.projects[pid]
         return None
 
+    def _home_candidates(self, taken):
+        """Every plausible project dir anywhere under $HOME — last-resort relocate.
+
+        The cheap 1-level scan in `_relocate` only sees folders moved/renamed
+        *inside* a known parent. This deep-walks the whole home tree so a folder
+        moved to an entirely new place can still be re-found by inode or content.
+
+        Returns [(realpath, name, inode), ...]. Excludes hidden dirs, SKIP_DIRS,
+        credential/secret dirs, and any dir already claimed by a tracked project
+        (`taken`). Never leaves $HOME (no symlink-follow). Bounded by
+        DEEP_SCAN_MAX_DIRS. The raw tree (minus `taken`) is cached for
+        _HOME_INDEX_TTL so one scan_all pass that relocates many projects walks
+        the disk once, not once per project.
+        """
+        now = time.time()
+        if self._home_index is not None and (now - self._home_index_at) < _HOME_INDEX_TTL:
+            cached = self._home_index
+        else:
+            home = os.path.realpath(os.path.expanduser('~'))
+            cached, seen = [], set()
+            stack = [home]
+            count = 0
+            while stack:
+                d = stack.pop()
+                try:
+                    with os.scandir(d) as it:
+                        for e in it:
+                            try:
+                                if not e.is_dir(follow_symlinks=False):
+                                    continue
+                                if e.name.startswith('.') or e.name in SKIP_DIRS:
+                                    continue
+                                rp = os.path.realpath(e.path)
+                            except OSError:
+                                continue
+                            if rp in seen or _is_sensitive_path(rp, home):
+                                continue
+                            seen.add(rp)
+                            count += 1
+                            if count > DEEP_SCAN_MAX_DIRS:
+                                stack = []
+                                break
+                            cached.append((rp, e.name, _dir_inode(rp)))
+                            stack.append(rp)
+                except OSError:
+                    continue
+            self._home_index = cached
+            self._home_index_at = now
+        # `taken` differs per project, so filter the shared cache on every call
+        return [(rp, nm, ino) for (rp, nm, ino) in cached if rp not in taken]
+
+    def _relocate(self, pid):
+        """Re-find a project folder the user renamed/moved, then update the path.
+
+        When proj['path'] no longer exists we look through the parents of every
+        tracked project (and the old parent) for the folder, matching by three
+        tiers, strongest first:
+
+          1. inode    — (st_dev, st_ino) is stable across an in-place rename on
+                        macOS. Exact; only set on records scanned by this build.
+          2. contents — enough of the last-known file_list still lives in the
+                        candidate. Survives a record that has no inode yet.
+          3. name     — a single untracked sibling whose name still relates to
+                        the old folder name (rename like  сайт → сайт_Borners).
+                        Used only when exactly one candidate matches, so it
+                        can't grab the wrong folder.
+
+        Tiers 1-3 only look one level deep inside the parents of tracked
+        projects. If they all miss — the folder moved somewhere brand new — we
+        fall back to a deep walk of the whole $HOME tree (tier 4), matching only
+        by inode or content signature (never by name, which is too ambiguous
+        across the entire home dir).
+
+        On a hit we update path (and name, if it still mirrored the folder name),
+        stamp a fresh inode, and persist. Returns the new realpath, or None.
+        Caller must NOT hold self.lock.
+        """
+        with self.lock:
+            proj = self.projects.get(pid)
+            if not proj:
+                return None
+            target = proj.get('inode')
+            sig = [r for r in (proj.get('file_list') or []) if r][:40]
+            old = os.path.realpath(proj['path'])
+            old_base = os.path.basename(old.rstrip(os.sep))
+            cur_name = proj.get('name')
+            # never claim a folder another project already tracks
+            taken = {os.path.realpath(p['path'])
+                     for p in self.projects.values() if p['id'] != pid}
+            roots = {os.path.dirname(os.path.realpath(p['path']))
+                     for p in self.projects.values()}
+        roots.add(os.path.dirname(old))
+        home = os.path.realpath(os.path.expanduser('~'))
+
+        # collect untracked candidate dirs across all searched roots (deduped)
+        cands, seen = [], set()
+        for root in roots:
+            if not root or not (root == home or root.startswith(home + os.sep)):
+                continue
+            try:
+                with os.scandir(root) as it:
+                    for e in it:
+                        try:
+                            if not e.is_dir(follow_symlinks=False):
+                                continue
+                            if e.name.startswith('.') or e.name in SKIP_DIRS:
+                                continue
+                            rp = os.path.realpath(e.path)
+                        except OSError:
+                            continue
+                        if rp in seen or rp in taken or _is_sensitive_path(rp, home):
+                            continue
+                        seen.add(rp)
+                        cands.append((rp, e.name))
+            except OSError:
+                continue
+
+        match = None
+        # tier 1 — exact inode
+        if target:
+            for rp, nm in cands:
+                if _dir_inode(rp) == target:
+                    match = (rp, nm)
+                    break
+        # tier 2 — content signature (≥60% of known files still present)
+        if not match and sig:
+            best = None
+            for rp, nm in cands:
+                hit = sum(1 for rel in sig if os.path.exists(os.path.join(rp, rel)))
+                frac = hit / len(sig)
+                if frac >= 0.6 and (best is None or frac > best[0]):
+                    best = (frac, rp, nm)
+            if best:
+                match = (best[1], best[2])
+        # tier 3 — unique name relative (only one untracked candidate matches)
+        if not match and len(old_base) >= 3:
+            ob = old_base.lower()
+            hits = [(rp, nm) for rp, nm in cands
+                    if (lambda n: n.startswith(ob) or ob.startswith(n) or ob in n)
+                       (nm.lower())]
+            if len(hits) == 1:
+                match = hits[0]
+
+        # tier 4 — LAST RESORT: deep walk of the whole $HOME tree. Covers a
+        # folder moved to an entirely new location (e.g. Desktop → Documents).
+        # Only inode + content signature: both are real identity signals, so a
+        # match anywhere in $HOME is trustworthy. Name matching is omitted here —
+        # across the whole tree it would collide constantly.
+        if not match and (target or sig):
+            deep = self._home_candidates(taken)
+            if target:                       # tier 4a — exact inode (mv keeps it)
+                for rp, nm, ino in deep:
+                    if ino == target:
+                        match = (rp, nm)
+                        break
+            if not match and sig:            # tier 4b — ≥60% of known files present
+                best = None
+                for rp, nm, ino in deep:
+                    hit = sum(1 for rel in sig if os.path.exists(os.path.join(rp, rel)))
+                    frac = hit / len(sig)
+                    if frac >= 0.6 and (best is None or frac > best[0]):
+                        best = (frac, rp, nm)
+                if best:
+                    match = (best[1], best[2])
+
+        if not match:
+            return None
+        rp, nm = match
+        with self.lock:
+            p = self.projects.get(pid)
+            if not p:
+                return None
+            p['path'] = rp
+            if cur_name == old_base:          # name wasn't customized
+                p['name'] = nm
+            p['inode'] = _dir_inode(rp)       # stamp so future renames hit tier 1
+            p['relocated_at'] = datetime.now().isoformat()
+            p['updated_at'] = p['relocated_at']
+            self.save()
+        return rp
+
     def scan(self, pid, save=True):
         with self.lock:
             proj = self.projects.get(pid)
@@ -168,6 +386,23 @@ class Store:
             return None
         # realpath the base so relpaths match read_file (which also realpaths)
         base = os.path.realpath(proj['path'])
+        # Folder renamed/moved? Re-find it by inode before giving up (else the
+        # scan would silently report 0 files for the now-missing old path).
+        if not os.path.isdir(base):
+            new_base = self._relocate(pid)
+            if new_base:
+                base = new_base
+            else:
+                with self.lock:
+                    proj = self.projects.get(pid)
+                    if not proj:
+                        return None
+                    proj['scan_error'] = 'missing'
+                    proj['last_stage'] = 'Папка не найдена — переименована или удалена?'
+                    proj['updated_at'] = datetime.now().isoformat()
+                    if save:
+                        self.save()
+                    return proj
         files, langs, lines = [], {}, 0
         last_mod = 0.0
         access_denied = False
@@ -262,6 +497,7 @@ class Store:
             proj['file_list'] = sorted(files)[:1000]
             proj['last_modified'] = last_mod or None
             proj['git'] = git
+            proj['inode'] = _dir_inode(base)   # keep fresh — enables rename re-find
             proj['last_stage'] = (
                 f"{len(files)} файлов · {lines:,} строк".replace(',', ' ')
             )
@@ -365,6 +601,72 @@ class Store:
         except OSError:
             pass
         return added
+
+    @staticmethod
+    def _write_vscode_task(dest):
+        """Drop .vscode/tasks.json so opening `dest` in VS Code opens the Claude
+        Code *extension panel* (not a terminal) pre-filled with `/onboard`.
+
+        Mechanism: a folderOpen task fires the extension's deep link
+        `vscode://anthropic.claude-code/open?prompt=%2Fonboard`. The extension's
+        URI handler routes that to `primaryEditor.open(session, prompt)`, and the
+        webview calls `setInputText("/onboard")` — so the panel opens with
+        `/onboard` typed in, ready to send with Enter. The `sleep` lets the
+        extension finish activating (it registers the URI handler on startup)
+        before the link fires.
+
+        Note: VS Code only auto-runs this if automatic tasks are allowed
+        (`task.allowAutomaticTasks: on`) and the folder is trusted (in Restricted
+        Mode the task is blocked and the extension itself is disabled — click
+        "Trust" on the banner first). The template already ships a
+        .vscode/settings.json — we add tasks.json beside it.
+        """
+        vs = os.path.join(dest, '.vscode')
+        os.makedirs(vs, exist_ok=True)
+        link = "vscode://anthropic.claude-code/open?prompt=%2Fonboard"
+        task = {
+            "version": "2.0.0",
+            "tasks": [{
+                "label": "Dashhy ▸ Claude onboard",
+                "type": "shell",
+                "command": f"sleep 1 && open '{link}'",
+                "presentation": {"echo": False, "reveal": "silent", "focus": False,
+                                 "panel": "shared", "close": True},
+                "runOptions": {"runOn": "folderOpen"},
+                "problemMatcher": [],
+            }],
+        }
+        with open(os.path.join(vs, 'tasks.json'), 'w') as f:
+            json.dump(task, f, indent=2, ensure_ascii=False)
+
+    def create_from_starter(self):
+        """Clone the project-starter template into a fresh ~/Desktop/new project.
+
+        Full copy (minus .git / node_modules / build junk), a VS Code folderOpen
+        task that auto-launches `claude /onboard`, then registers it so it shows
+        up in the grid. Returns (project, dest_path). Raises ValueError with a
+        user-facing (Russian) message on any expected failure.
+        """
+        src = os.path.realpath(STARTER_DIR)
+        if not os.path.isdir(src):
+            raise ValueError(f"Болванка не найдена: {STARTER_DIR}")
+        home = os.path.realpath(os.path.expanduser('~'))
+        parent = os.path.realpath(NEW_PROJ_BASE)
+        # never overwrite an existing folder — "new project", "new project 2", …
+        dest = os.path.join(parent, NEW_PROJ_NAME)
+        n = 2
+        while os.path.exists(dest):
+            dest = os.path.join(parent, f"{NEW_PROJ_NAME} {n}")
+            n += 1
+        rp = os.path.realpath(dest)
+        if not (rp == home or rp.startswith(home + os.sep)) or _is_sensitive_path(rp, home):
+            raise ValueError("Недопустимый путь назначения")
+        # guard against cloning the template into itself
+        if rp == src or rp.startswith(src + os.sep):
+            raise ValueError("Нельзя создать проект внутри болванки")
+        shutil.copytree(src, dest, ignore=COPY_IGNORE, symlinks=False)
+        self._write_vscode_task(dest)
+        return self.add(os.path.basename(dest), dest), dest
 
     def scan_all(self):
         """Re-scan all projects sequentially, saving ONCE at the end."""
@@ -590,6 +892,25 @@ def open_terminal(path, cmd=None):
         return False
 
 
+def open_in_vscode(path):
+    """Open `path` as a folder in VS Code.
+
+    Prefers `open -a` (LaunchServices) because the frozen .app, launched from
+    Finder, has a minimal PATH that lacks Homebrew's `code`. Falls back to the
+    `code` CLI for the run-from-source dev case.
+    """
+    for cmd in (['open', '-a', 'Visual Studio Code', path], ['code', path]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, check=False)
+            if r.returncode == 0:
+                return True
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+    return False
+
+
 def open_in_editor(path):
     """Try VS Code, then Cursor, then default `open`."""
     for cmd in (['code', path], ['open', '-a', 'Cursor', path],
@@ -762,6 +1083,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p == '/api/discover':
             added = STORE.discover(body.get('path'))
             return self._json({'added': added})
+        if p == '/api/create-project':
+            try:
+                proj, dest = STORE.create_from_starter()
+            except ValueError as e:
+                return self._json({'error': str(e)}, 400)
+            except Exception as e:
+                print(f"[create-project] {e}", file=sys.stderr)
+                return self._json({'error': 'Не удалось создать проект'}, 500)
+            opened = open_in_vscode(dest)
+            return self._json({'project': proj, 'path': dest, 'opened': opened})
         return self._json({'error': 'unknown route'}, 404)
 
     def do_DELETE(self):

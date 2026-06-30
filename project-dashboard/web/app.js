@@ -454,6 +454,27 @@ async function openNotes(proj) {
 }
 
 /* ---------- add project ---------- */
+/* ---------- create project from the project-starter template ---------- */
+$('#create-btn').addEventListener('click', async () => {
+  const btn = $('#create-btn');
+  btn.disabled = true;
+  try {
+    toast('Создаю новый проект…');
+    const r = await api('/api/create-project', { method: 'POST' });
+    if (r && r.project) {
+      await load();
+      const tail = r.opened ? 'открываю VS Code…' : 'VS Code не открылся — открой папку вручную';
+      toast(`Новый проект: «${r.project.name}» — ${tail}`);
+    } else {
+      toast('Не удалось создать проект');
+    }
+  } catch (e) {
+    toast('Ошибка: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $('#add-btn').addEventListener('click', async () => {
   const btn = $('#add-btn');
   btn.disabled = true;
@@ -546,7 +567,7 @@ const MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>';
 function applyTheme(t) {
   document.body.dataset.theme = t;
   $('#theme-icon').innerHTML = t === 'dark' ? SUN : MOON;
-  try { localStorage.setItem('pd-theme', t); } catch (e) {}
+  try { localStorage.setItem('pd-theme-v2', t); } catch (e) {}
 }
 $('#theme-toggle').addEventListener('click', () => {
   applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -622,6 +643,7 @@ function buildCommands() {
   const cmds = [
     { label: 'Сканировать все проекты', run: () => $('#refresh-btn').click() },
     { label: 'Сменить тему', run: () => $('#theme-toggle').click() },
+    { label: 'Создать проект', run: () => $('#create-btn').click() },
     { label: 'Добавить проект', run: () => $('#add-btn').click() },
     { label: 'Найти проекты в папке', run: () => $('#grant-btn').click() },
   ];
@@ -703,8 +725,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) auto
 
 /* ---------- init ---------- */
 (function init() {
-  let t = 'light';
-  try { t = localStorage.getItem('pd-theme') || 'light'; } catch (e) {}
+  let t = 'dark';
+  try { t = localStorage.getItem('pd-theme-v2') || 'dark'; } catch (e) {}
   applyTheme(t);
   const d = new Date();
   $('#crumb-date').textContent = d.toLocaleDateString('ru-RU',
