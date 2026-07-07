@@ -1,0 +1,62 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller "pywebview>=5.0,<7.0"
+
+      - name: Build Dashhy.exe
+        working-directory: windows/project-dashboard
+        run: pyinstaller --noconfirm Dashhy.spec
+
+      - name: Assemble ready-to-run package
+        shell: pwsh
+        run: |
+          $ready = "out/dashhy-windows-ready"
+          New-Item -ItemType Directory -Force -Path $ready | Out-Null
+          Copy-Item windows/project-dashboard/dist/Dashhy.exe "$ready/Dashhy.exe"
+          Copy-Item "windows/Install Dashhy.bat" "$ready/"
+          Copy-Item windows/README.md, windows/INSTALL.md, windows/SECURITY.md, windows/LICENSE, windows/THIRD_PARTY_NOTICES.md $ready/
+          Compress-Archive -Path "$ready/*" -DestinationPath "out/dashhy-windows-ready.zip" -Force
+
+      - name: Assemble source package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path "windows/*" -DestinationPath "out/dashhy-windows-source.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashhy-windows-build
+          path: out/*.zip
+          retention-days: 14
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows
+          name: "Dashhy for Windows"
+          body: |
+            Автосборка Windows-версии Dashhy (собрано на `windows-latest` в GitHub Actions).
+
+            - **dashhy-windows-ready.zip** — распакуй, запусти `Install Dashhy.bat`. Появится ярлык на рабочем столе, Dashhy запустится. Python не нужен.
+            - **dashhy-windows-source.zip** — исходники + `build_app.bat`, для тех, кто хочет собрать сам.
+
+            Собрано автоматически из ветки `windows-port`, коммит ${{ github.sha }}.
+          files: out/*.zip
