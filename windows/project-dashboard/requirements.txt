@@ -1,0 +1,10 @@
+# Dashhy dependencies (Windows)
+#
+# Browser mode  (python server.py)  needs NOTHING beyond the Python 3 standard
+# library — there is nothing to install for it.
+#
+# Native window  (python app.py)  needs pywebview, a thin wrapper around
+# Microsoft Edge WebView2. It pulls in `pythonnet` automatically on Windows.
+# The WebView2 Runtime itself ships preinstalled on Windows 11 — nothing to
+# install there either.
+pywebview>=5.0,<7.0
