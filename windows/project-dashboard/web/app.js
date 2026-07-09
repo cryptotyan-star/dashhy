@@ -166,7 +166,7 @@ function renderBanner() {
     b.querySelector('[data-b="discover"]').onclick = () => $('#grant-btn').click();
   } else if (PROJECTS.some(p => p.scan_error === 'no_access')) {
     b.hidden = false; b.className = 'pd-banner warn';
-    b.innerHTML = `<span>🔒 Часть папок без доступа (macOS). Выдай доступ к папке с проектами — и сканирование заработает.</span>
+    b.innerHTML = `<span>🔒 Часть папок без доступа. Проверь права NTFS или антивирус — и сканирование заработает.</span>
       <button class="pd-btn primary" data-b="grant">Дать доступ</button>`;
     b.querySelector('[data-b="grant"]').onclick = () => $('#grant-btn').click();
   } else {
@@ -189,7 +189,7 @@ function renderStats() {
   // feature tile (1.55fr) — headline KPI
   const feature = el('div', 'mi-tile mi-feature');
   feature.innerHTML = `
-    <div class="mi-feature-top">${ICON.grid}Проектов на этом Mac</div>
+    <div class="mi-feature-top">${ICON.grid}Проектов на этом компьютере</div>
     <div class="mi-feature-num tnum">${fmt(total)}</div>
     <div class="mi-feature-tags">
       <span class="mi-ftag">${ICON.play}${active} активных</span>
@@ -228,7 +228,7 @@ function renderCards() {
         <path d="M12 11v6M9 14h6"/>
       </svg>
       <b>${esc(noProjects ? 'Пока нет проектов' : 'Ничего не найдено')}</b>
-      <span>${esc(noProjects ? 'Добавьте папку проекта на вашем Mac' : 'Измените поиск или фильтр')}</span>
+      <span>${esc(noProjects ? 'Добавьте папку проекта на этом компьютере' : 'Измените поиск или фильтр')}</span>
       ${noProjects ? '<button class="pd-btn primary" data-act="cta-add">＋ Добавить проект</button>' : ''}`;
     if (noProjects) {
       e.querySelector('[data-act="cta-add"]').addEventListener('click', () => $('#add-btn').click());

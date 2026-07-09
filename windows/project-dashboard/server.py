@@ -86,11 +86,25 @@ SENSITIVE_SUBPATHS = tuple(p.replace('/', os.sep) for p in (
 ))
 
 
+def _within(child, parent):
+    """True if realpath `child` equals or is inside realpath `parent`.
+
+    Uses os.path.normcase() for the comparison — a no-op on POSIX, but on
+    Windows it case-folds and normalizes slashes. NTFS is case-insensitive
+    (though case-preserving), so a plain `==`/`startswith` comparison here
+    would wrongly reject a folder whose casing doesn't byte-for-byte match
+    %USERPROFILE% (e.g. a path picked via the WinForms folder dialog, which
+    reflects Explorer's on-disk casing, can differ from the environment
+    variable's casing) — every project-add would fail with "invalid path".
+    """
+    nchild, nparent = os.path.normcase(child), os.path.normcase(parent)
+    return nchild == nparent or nchild.startswith(nparent + os.path.normcase(os.sep))
+
+
 def _is_sensitive_path(rp, home):
     """True if realpath `rp` is, or is inside, a known credential/secret dir."""
     for sub in SENSITIVE_SUBPATHS:
-        b = os.path.join(home, sub)
-        if rp == b or rp.startswith(b + os.sep):
+        if _within(rp, os.path.join(home, sub)):
             return True
     return False
 
@@ -292,7 +306,7 @@ class Store:
         # collect untracked candidate dirs across all searched roots (deduped)
         cands, seen = [], set()
         for root in roots:
-            if not root or not (root == home or root.startswith(home + os.sep)):
+            if not root or not _within(root, home):
                 continue
             try:
                 with os.scandir(root) as it:
@@ -576,8 +590,7 @@ class Store:
         """
         root = os.path.realpath(root or '')
         home = os.path.realpath(os.path.expanduser('~'))
-        if not root or not (root == home or root.startswith(home + os.sep)) \
-                or _is_sensitive_path(root, home):
+        if not root or not _within(root, home) or _is_sensitive_path(root, home):
             return []
         markers = ('.git', 'package.json', 'pyproject.toml', 'requirements.txt',
                    'Cargo.toml', 'go.mod', 'composer.json')
@@ -662,10 +675,10 @@ class Store:
             dest = os.path.join(parent, f"{NEW_PROJ_NAME} {n}")
             n += 1
         rp = os.path.realpath(dest)
-        if not (rp == home or rp.startswith(home + os.sep)) or _is_sensitive_path(rp, home):
+        if not _within(rp, home) or _is_sensitive_path(rp, home):
             raise ValueError("Недопустимый путь назначения")
         # guard against cloning the template into itself
-        if rp == src or rp.startswith(src + os.sep):
+        if _within(rp, src):
             raise ValueError("Нельзя создать проект внутри болванки")
         shutil.copytree(src, dest, ignore=COPY_IGNORE, symlinks=False)
         self._write_vscode_task(dest)
@@ -707,7 +720,7 @@ class Store:
         # sibling like  /a/proj-evil  can't pass for being inside  /a/proj
         base = os.path.realpath(proj['path'])
         full = os.path.realpath(os.path.join(base, rel))
-        if full != base and not full.startswith(base + os.sep):
+        if not _within(full, base):
             return None
         # only ever serve the code/text files we actually index — never raw
         # secrets like id_rsa / .env that might sit inside an added folder
@@ -738,7 +751,7 @@ class Store:
             # confine to the project root — realpath blocks a manifest/README
             # symlink that points outside the project (or outside $HOME)
             full = os.path.realpath(os.path.join(base, name))
-            if full != base and not full.startswith(base + os.sep):
+            if not _within(full, base):
                 return None
             try:
                 with open(full, errors='ignore') as fh:
@@ -1088,7 +1101,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             #  deny known secret dirs and refuse to read non-code files.)
             rp = os.path.realpath(path) if path else ''
             home = os.path.realpath(os.path.expanduser('~'))
-            inside_home = bool(rp) and (rp == home or rp.startswith(home + os.sep))
+            inside_home = bool(rp) and _within(rp, home)
             if not path or not os.path.isdir(rp) or not inside_home \
                     or _is_sensitive_path(rp, home):
                 return self._json({'error': 'invalid path'}, 400)
