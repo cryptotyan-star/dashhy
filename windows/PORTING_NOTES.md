@@ -1,8 +1,10 @@
 # Porting notes — macOS → Windows 11
 
 What changed going from the original macOS build to this Windows port, and why.
-The frontend (`web/` — HTML/CSS/JS) is **byte-for-byte identical**; everything
-below is backend/build/OS-integration only.
+The frontend (`web/`) is identical to macOS except for **Windows wording**
+(«на этом ПК», «проводник», «терминал») and the settings screen's
+platform labels (Windows Terminal / cmd / PowerShell instead of
+Terminal.app / iTerm). Everything else below is backend/build/OS-integration.
 
 | Area | macOS | Windows |
 |------|-------|---------|
@@ -19,6 +21,9 @@ below is backend/build/OS-integration only.
 | OS folder-access consent | macOS TCC / Full Disk Access — a system dialog Dashhy detects and surfaces a banner for | No OS-level equivalent for normal user folders; a `PermissionError` (e.g. from an AV lock or NTFS ACL) now falls back to a generic "no access" message instead of a Full-Disk-Access-specific one |
 | Credential denylist | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.password-store`, `~/.config/gh`, `~/.config/gcloud`, `~/Library/Keychains` | `~\.ssh`, `~\.aws`, `~\.gnupg`, `~\.kube`, `~\.docker`, `~\.netrc`, `~\.password-store`, `~\AppData\Roaming\gh`, `~\AppData\Roaming\gcloud`, `~\AppData\Local\gcloud`, `~\AppData\Roaming\Microsoft\Credentials`, `~\AppData\Local\Microsoft\Credentials` |
 | Old-install migration | one-time copy from `~/Library/Application Support/ProjectDashboard` (a pre-Dashhy rename) | removed — no prior Windows installs exist to migrate from |
+| **Launch at login** (settings) | per-user LaunchAgent plist under `~/Library/LaunchAgents` + `launchctl load` | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `Dashhy` via `winreg` (frozen → the `.exe`; source → `pythonw.exe app.py`) |
+| **Terminal choice** (settings) | Terminal.app / iTerm (osascript) | Windows Terminal (`wt`) / `cmd` (throwaway `.bat`) / PowerShell (`-NoExit`) |
+| **Open external URL** (settings ▸ GitHub) | `subprocess open <url>` | `os.startfile(url)` — both allowlisted to `github.com` |
 
 ## Unchanged (works identically)
 
@@ -34,6 +39,17 @@ below is backend/build/OS-integration only.
   signature) are filesystem-agnostic already.
 - **Git snapshot** — shells out to `git`, same command either way (needs
   Git for Windows on `PATH`).
+
+## Settings screen (added after the initial port)
+
+The settings screen (gear button, 4th in the left rail) is backed by a
+`config.json` beside `projects.json` in `%LOCALAPPDATA%\Dashhy` and a
+`/api/config` GET/POST route. Every setting is validated server-side: all
+folder paths are confined to `$HOME` via the case-insensitive `_within()`
+helper and rejected for credential dirs; the editor/terminal choices are
+coerced to a known enum; the new-project folder name is stripped of
+Windows-illegal filename characters (`\ / : * ? " < > |`). The data-dir
+setting relocates `projects.json` (copying, not deleting, the old copy).
 
 ## Known limitations of this port
 

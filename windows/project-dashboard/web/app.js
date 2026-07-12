@@ -23,6 +23,7 @@ let PROJECTS = [];
 let FILTER = '';     // sidebar status filter
 let QUERY = '';      // search text
 let SORT = 'recent'; // recent | name | size
+let CFG = null;      // app config (settings screen); loaded on init
 
 const $ = (s, r = document) => r.querySelector(s);
 const el = (tag, cls, html) => {
@@ -47,7 +48,7 @@ function relTime(ts) {
   return Math.floor(mo / 12) + ' г';
 }
 // last two path segments — readable, no ugly rtl truncation
-const shortPath = p => p.replace(/\/$/, '').split('/').slice(-2).join('/');
+const shortPath = p => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('\\');
 
 // project health by last activity: 🟢 <7d · 🟡 7–30d · ⚪ stale/unknown
 function health(ts) {
@@ -166,7 +167,7 @@ function renderBanner() {
     b.querySelector('[data-b="discover"]').onclick = () => $('#grant-btn').click();
   } else if (PROJECTS.some(p => p.scan_error === 'no_access')) {
     b.hidden = false; b.className = 'pd-banner warn';
-    b.innerHTML = `<span>🔒 Часть папок без доступа. Проверь права NTFS или антивирус — и сканирование заработает.</span>
+    b.innerHTML = `<span>🔒 К части папок нет доступа. Проверь права NTFS или антивирус — и сканирование заработает.</span>
       <button class="pd-btn primary" data-b="grant">Дать доступ</button>`;
     b.querySelector('[data-b="grant"]').onclick = () => $('#grant-btn').click();
   } else {
@@ -189,7 +190,7 @@ function renderStats() {
   // feature tile (1.55fr) — headline KPI
   const feature = el('div', 'mi-tile mi-feature');
   feature.innerHTML = `
-    <div class="mi-feature-top">${ICON.grid}Проектов на этом компьютере</div>
+    <div class="mi-feature-top">${ICON.grid}Проектов на этом ПК</div>
     <div class="mi-feature-num tnum">${fmt(total)}</div>
     <div class="mi-feature-tags">
       <span class="mi-ftag">${ICON.play}${active} активных</span>
@@ -228,7 +229,7 @@ function renderCards() {
         <path d="M12 11v6M9 14h6"/>
       </svg>
       <b>${esc(noProjects ? 'Пока нет проектов' : 'Ничего не найдено')}</b>
-      <span>${esc(noProjects ? 'Добавьте папку проекта на этом компьютере' : 'Измените поиск или фильтр')}</span>
+      <span>${esc(noProjects ? 'Добавьте папку проекта на вашем ПК' : 'Измените поиск или фильтр')}</span>
       ${noProjects ? '<button class="pd-btn primary" data-act="cta-add">＋ Добавить проект</button>' : ''}`;
     if (noProjects) {
       e.querySelector('[data-act="cta-add"]').addEventListener('click', () => $('#add-btn').click());
@@ -313,7 +314,7 @@ function card(p) {
     <div class="mi-proj-foot">
       <select class="mi-pill mi-pill--${p.status}" data-act="status">${opts}</select>
       <div class="mi-acts">
-        <button class="mi-act" data-act="terminal" title="Открыть Terminal здесь">
+        <button class="mi-act" data-act="terminal" title="Открыть терминал здесь">
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
         </button>
         <button class="mi-act ${p.run_cmd ? 'has-dot' : ''}" data-act="run" title="${esc(runTitle)}">
@@ -328,7 +329,7 @@ function card(p) {
         <button class="mi-act ${hasNotes ? 'has-dot' : ''}" data-act="notes" title="Заметки / TODO">
           <svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M8 10h8M8 14h8M8 17h5"/></svg>
         </button>
-        <button class="mi-act" data-act="finder" title="Открыть в Finder">
+        <button class="mi-act" data-act="finder" title="Открыть в проводнике">
           <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         </button>
         <button class="mi-act is-primary" data-act="editor" title="Открыть в редакторе">
@@ -402,9 +403,9 @@ $('#projects').addEventListener('click', async (ev) => {
     }
     if (act === 'files')  return openFiles(proj);
     if (act === 'notes')  return openNotes(proj);
-    if (act === 'finder') { await api('/api/open', { method: 'POST', body: JSON.stringify({ id }) }); return toast('Открыто в Finder'); }
+    if (act === 'finder') { await api('/api/open', { method: 'POST', body: JSON.stringify({ id }) }); return toast('Открыто в проводнике'); }
     if (act === 'editor') { await api('/api/open', { method: 'POST', body: JSON.stringify({ id, editor: true }) }); return toast('Открыто в редакторе'); }
-    if (act === 'terminal') { await api('/api/launch', { method: 'POST', body: JSON.stringify({ id }) }); return toast('Terminal открыт'); }
+    if (act === 'terminal') { await api('/api/launch', { method: 'POST', body: JSON.stringify({ id }) }); return toast('Терминал открыт'); }
     if (act === 'run') {
       if (ev.altKey || !proj.run_cmd) {
         const cmd = await pdPrompt(`Команда запуска для «${proj.name}»`, proj.run_cmd || '');
@@ -550,8 +551,9 @@ document.addEventListener('keydown', (e) => {
 $('#search').addEventListener('input', (e) => { QUERY = e.target.value; renderCards(); });
 const sortSel = $('#sort-sel');
 if (sortSel) sortSel.addEventListener('change', (e) => { SORT = e.target.value; renderCards(); });
-document.querySelectorAll('.mi-railbtn').forEach(nav => {
+document.querySelectorAll('.mi-railbtn:not(.mi-railgear)').forEach(nav => {
   nav.addEventListener('click', () => {
+    showDash();
     document.querySelectorAll('.mi-railbtn').forEach(n => n.classList.remove('on'));
     nav.classList.add('on');
     FILTER = nav.dataset.filter || '';
@@ -646,6 +648,7 @@ function buildCommands() {
     { label: 'Создать проект', run: () => $('#create-btn').click() },
     { label: 'Добавить проект', run: () => $('#add-btn').click() },
     { label: 'Найти проекты в папке', run: () => $('#grant-btn').click() },
+    { label: 'Настройки', run: () => showSettings() },
   ];
   PROJECTS.forEach(p => {
     cmds.push({
@@ -654,9 +657,9 @@ function buildCommands() {
         .then(() => toast('Открыто: ' + p.name)).catch(e => toast('Ошибка: ' + e.message)),
     });
     cmds.push({
-      label: `Terminal: ${p.name}`, hint: shortPath(p.path),
+      label: `Терминал: ${p.name}`, hint: shortPath(p.path),
       run: () => api('/api/launch', { method: 'POST', body: JSON.stringify({ id: p.id }) })
-        .then(() => toast('Terminal: ' + p.name)).catch(e => toast('Ошибка: ' + e.message)),
+        .then(() => toast('Терминал: ' + p.name)).catch(e => toast('Ошибка: ' + e.message)),
     });
   });
   return cmds;
@@ -711,12 +714,245 @@ document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); }
 });
 
+/* ================= settings (a distinct "level") ================= */
+const SET_ICON = {
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  play:   '<svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
+  scan:   '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.2-8.6"/><path d="M21 3v6h-6"/></svg>',
+  disk:   '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
+  power:  '<svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>',
+  gh:     '<svg viewBox="0 0 24 24"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 20 4.8 4.9 4.9 0 0 0 19.9 1S18.7.6 16 2.5a13.4 13.4 0 0 0-7 0C6.3.6 5.1 1 5.1 1A4.9 4.9 0 0 0 5 4.8a5.2 5.2 0 0 0-1.4 3.7c0 5.2 3.2 6.4 6.2 6.7A3.4 3.4 0 0 0 9 17.8V22"/></svg>',
+  pick:   '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  x:      '<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+};
+const EDITORS   = [['auto', 'Авто (VS Code → Cursor)'], ['code', 'VS Code'], ['cursor', 'Cursor'], ['system', 'Системный']];
+const TERMINALS = [['wt', 'Windows Terminal'], ['cmd', 'Командная строка (cmd)'], ['powershell', 'PowerShell']];
+const INTERVALS = [['15', 'каждые 15 сек'], ['30', 'каждые 30 сек'], ['45', 'каждые 45 сек'],
+                   ['120', 'каждые 2 мин'], ['0', 'никогда']];
+
+function showDash() {
+  document.body.dataset.view = 'dash';
+  $('#settings-btn').classList.remove('on');
+}
+function showSettings() {
+  document.body.dataset.view = 'settings';
+  document.querySelectorAll('.mi-railbtn').forEach(n => n.classList.remove('on'));
+  $('#settings-btn').classList.add('on');
+  const title = $('#screen-title'); if (title) title.textContent = 'Настройки';
+  renderSettings();
+}
+
+async function saveConfig(patch) {
+  try {
+    const r = await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
+    CFG = r.config;
+    toast('Сохранено');
+    return true;
+  } catch (e) { toast('Ошибка: ' + e.message); return false; }
+}
+
+// native folder pick → build a patch from the chosen path → save → re-render
+async function pickAndSave(patchFn) {
+  const picked = await api('/api/pick', { method: 'POST' }).catch(() => null);
+  if (!picked || !picked.path) return;
+  if (await saveConfig(patchFn(picked.path))) renderSettings();
+}
+
+const opts = (val, list) => list
+  .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(l)}</option>`).join('');
+const swHTML = (id, on) => `<label class="set-switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}>
+  <span class="track"><span class="knob"></span></span></label>`;
+
+function renderSettings() {
+  const wrap = $('#settings');
+  if (!CFG) { wrap.innerHTML = '<div class="set-card">Загрузка настроек…</div>'; return; }
+  const np = CFG.new_project || {}, lc = CFG.launch || {}, sc = CFG.scan || {},
+        stg = CFG.storage || {}, su = CFG.startup || {};
+  const watched = sc.watched || [];
+
+  const folders = watched.length
+    ? watched.map((f, i) => `<div class="set-folder"><span class="fp" title="${esc(f)}">${esc(f)}</span>
+        <button class="rm" data-rm="${i}" title="Убрать">${SET_ICON.x}</button></div>`).join('')
+    : '<div class="set-folders-empty">Пока нет папок — добавьте, и Dashhy будет искать проекты в них при запуске.</div>';
+
+  wrap.innerHTML = `
+    <!-- new project -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.folder}<h3>Новый проект</h3></div>
+      <p class="set-card-sub">Откуда стартуют новые папки и по какой болванке.</p>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Папка для новых проектов</div>
+          <div class="set-row-hint" title="${esc(np.base_dir || '')}">${esc(np.base_dir || '—')}</div></div>
+        <div class="set-row-ctrl"><button class="set-btn" data-act="pick-base">${SET_ICON.pick}Выбрать…</button></div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Имя новой папки</div>
+          <div class="set-row-hint">Появится как «имя», «имя 2», …</div></div>
+        <div class="set-row-ctrl"><input class="set-input" id="s-name" value="${esc(np.name || '')}" placeholder="new project"></div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Болванка (шаблон)</div>
+          <div class="set-row-hint" title="${esc(np.starter_dir || '')}">${esc(np.starter_dir || '—')}</div></div>
+        <div class="set-row-ctrl"><button class="set-btn" data-act="pick-starter">${SET_ICON.pick}Выбрать…</button></div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Команда онбординга</div>
+          <div class="set-row-hint">Подставляется в задачу VS Code при создании проекта.</div></div>
+        <div class="set-row-ctrl"><input class="set-input" id="s-onboard" value="${esc(np.onboard || '')}" placeholder="/onboard"></div>
+      </div>
+    </div>
+
+    <!-- launch -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.play}<h3>Запуск проектов</h3></div>
+      <p class="set-card-sub">Чем открывать код и где запускать команды.</p>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Редактор по умолчанию</div>
+          <div class="set-row-hint">Кнопка «Открыть в редакторе» на карточке.</div></div>
+        <div class="set-row-ctrl"><select class="set-select" id="s-editor">${opts(lc.editor, EDITORS)}</select></div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Терминал</div>
+          <div class="set-row-hint">Где открывается терминал / запуск команды.</div></div>
+        <div class="set-row-ctrl"><select class="set-select" id="s-term">${opts(lc.terminal, TERMINALS)}</select></div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Команда запуска по умолчанию</div>
+          <div class="set-row-hint">Для проектов без своей команды.</div></div>
+        <div class="set-row-ctrl"><input class="set-input" id="s-runcmd" value="${esc(lc.default_run_cmd || '')}" placeholder="npm run dev"></div>
+      </div>
+    </div>
+
+    <!-- scan -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.scan}<h3>Сканирование</h3></div>
+      <p class="set-card-sub">Как Dashhy обновляет проекты и где ищет новые.</p>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Автообновление при фокусе окна</div>
+          <div class="set-row-hint">Пересканировать проекты, когда возвращаешься в Dashhy.</div></div>
+        <div class="set-row-ctrl">${swHTML('s-auto', sc.auto_on_focus !== false)}</div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Как часто пересканировать</div>
+          <div class="set-row-hint">Ограничение частоты тяжёлого скана.</div></div>
+        <div class="set-row-ctrl"><select class="set-select" id="s-interval">${opts(sc.interval_sec, INTERVALS)}</select></div>
+      </div>
+      <div class="set-row" style="align-items:flex-start">
+        <div class="set-row-main"><div class="set-row-label">Папки для авто-поиска проектов</div>
+          <div class="set-folders">${folders}</div></div>
+        <div class="set-row-ctrl" style="flex-direction:column;align-items:stretch;gap:8px">
+          <button class="set-btn" data-act="add-watch">${SET_ICON.pick}Добавить папку</button>
+          <button class="set-btn" data-act="scan-now">${SET_ICON.scan}Сканировать сейчас</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- storage -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.disk}<h3>Хранилище</h3></div>
+      <p class="set-card-sub">Где Dashhy хранит список проектов (projects.json). Настройки всегда лежат рядом с приложением.</p>
+      <div class="set-row" style="align-items:flex-start">
+        <div class="set-row-main"><div class="set-row-label">Папка данных</div>
+          <div class="set-path">${esc(stg.data_dir || '—')}\\projects.json</div></div>
+        <div class="set-row-ctrl"><button class="set-btn" data-act="pick-data">${SET_ICON.pick}Изменить…</button></div>
+      </div>
+    </div>
+
+    <!-- startup -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.power}<h3>Автозапуск</h3></div>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Запускать при старте компьютера</div>
+          <div class="set-row-hint">Добавляет Dashhy в автозагрузку Windows (реестр HKCU\\…\\Run). Убрать можно здесь же.</div></div>
+        <div class="set-row-ctrl">${swHTML('s-login', !!su.launch_at_login)}</div>
+      </div>
+    </div>
+
+    <!-- github -->
+    <div class="set-card">
+      <div class="set-card-head">${SET_ICON.gh}<h3>GitHub</h3></div>
+      <p class="set-card-sub">Заведи аккаунт или открой GitHub. Импорт репозиториев в дэш — скоро.</p>
+      <div class="set-row">
+        <div class="set-row-main"><div class="set-row-label">Аккаунт GitHub</div>
+          <div class="set-row-hint">Регистрация нужна, чтобы позже подтягивать репозитории.</div></div>
+        <div class="set-row-ctrl">
+          <button class="set-btn gh" data-act="gh-signup">${SET_ICON.gh}Регистрация</button>
+          <button class="set-btn" data-act="gh-open">Открыть GitHub</button>
+        </div>
+      </div>
+    </div>`;
+
+  wireSettings();
+}
+
+function wireSettings() {
+  const wrap = $('#settings');
+  const on = (id, ev, fn) => { const e = $('#' + id, wrap); if (e) e.addEventListener(ev, fn); };
+
+  // text inputs — save on change (blur / Enter)
+  on('s-name',    'change', e => saveConfig({ new_project: { name: e.target.value } }));
+  on('s-onboard', 'change', e => saveConfig({ new_project: { onboard: e.target.value } }));
+  on('s-runcmd',  'change', e => saveConfig({ launch: { default_run_cmd: e.target.value } }));
+  // selects
+  on('s-editor',   'change', e => saveConfig({ launch: { editor: e.target.value } }));
+  on('s-term',     'change', e => saveConfig({ launch: { terminal: e.target.value } }));
+  on('s-interval', 'change', e => saveConfig({ scan: { interval_sec: Number(e.target.value) } }));
+  // switches
+  on('s-auto',  'change', e => saveConfig({ scan: { auto_on_focus: e.target.checked } }));
+  on('s-login', 'change', async e => {
+    const want = e.target.checked;
+    const okd = await saveConfig({ startup: { launch_at_login: want } });
+    if (!okd || (CFG.startup && CFG.startup.launch_at_login !== want)) renderSettings();  // reflect real state
+  });
+
+  // buttons (delegation)
+  wrap.querySelectorAll('[data-act]').forEach(btn => btn.addEventListener('click', async () => {
+    const act = btn.dataset.act;
+    if (act === 'pick-base')    return pickAndSave(p => ({ new_project: { base_dir: p } }));
+    if (act === 'pick-starter') return pickAndSave(p => ({ new_project: { starter_dir: p } }));
+    if (act === 'pick-data')    return pickAndSave(p => ({ storage: { data_dir: p } }));
+    if (act === 'add-watch')    return pickAndSave(p => ({ scan: { watched: [ ...(CFG.scan.watched || []), p ] } }));
+    if (act === 'scan-now') {
+      btn.disabled = true;
+      try {
+        const r = await api('/api/discover-watched', { method: 'POST' });
+        const n = (r.added || []).length;
+        toast(n ? `Найдено новых проектов: ${n}` : 'Новых проектов не найдено');
+        await load();
+      } catch (e) { toast('Ошибка: ' + e.message); } finally { btn.disabled = false; }
+      return;
+    }
+    if (act === 'gh-signup') { await api('/api/open-url', { method: 'POST', body: JSON.stringify({ url: 'https://github.com/signup' }) }); return; }
+    if (act === 'gh-open')   { await api('/api/open-url', { method: 'POST', body: JSON.stringify({ url: 'https://github.com' }) }); return; }
+  }));
+
+  // remove a watched folder
+  wrap.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', async () => {
+    const i = Number(b.dataset.rm);
+    const next = (CFG.scan.watched || []).filter((_, idx) => idx !== i);
+    if (await saveConfig({ scan: { watched: next } })) renderSettings();
+  }));
+}
+
+$('#settings-btn').addEventListener('click', showSettings);
+// Esc leaves settings (when no modal/palette is open)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.dataset.view === 'settings'
+      && !document.querySelector('.pd-modal:not([hidden]), .pd-palette')) {
+    const dash = document.querySelector('.mi-railbtn[data-filter=""]');
+    if (dash) dash.click(); else showDash();
+  }
+});
+
 /* ---------- auto-refresh when the window regains focus ---------- */
 let lastAuto = 0;
 function autoRefresh() {
   load().catch(() => {});                 // instant: reflect current registry
+  if (!CFG || !CFG.scan || CFG.scan.auto_on_focus === false) return;
+  const iv = (Number(CFG.scan.interval_sec) || 0) * 1000;
+  if (iv <= 0) return;                     // rescan disabled
   const t = Date.now();
-  if (t - lastAuto < 45000) return;       // throttle the heavier rescan
+  if (t - lastAuto < iv) return;           // throttle the heavier rescan
   lastAuto = t;
   api('/api/scan-all', { method: 'POST' }).then(() => load()).catch(() => {});
 }
@@ -724,7 +960,7 @@ window.addEventListener('focus', autoRefresh);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) autoRefresh(); });
 
 /* ---------- init ---------- */
-(function init() {
+(async function init() {
   let t = 'dark';
   try { t = localStorage.getItem('pd-theme-v2') || 'dark'; } catch (e) {}
   applyTheme(t);
@@ -732,5 +968,15 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) auto
   $('#crumb-date').textContent = d.toLocaleDateString('ru-RU',
     { weekday: 'long', day: 'numeric', month: 'long' });
   document.body.classList.add('bn-ready');
+  document.body.dataset.view = 'dash';
+
+  try { CFG = (await api('/api/config')).config; } catch (e) { /* defaults on server */ }
   load().catch(err => toast('Ошибка загрузки: ' + err.message));
+
+  // background: pick up projects from watched folders on startup
+  if (CFG && CFG.scan && (CFG.scan.watched || []).length) {
+    api('/api/discover-watched', { method: 'POST' })
+      .then(r => { if (r.added && r.added.length) { load(); toast('Найдено проектов: ' + r.added.length); } })
+      .catch(() => {});
+  }
 })();
