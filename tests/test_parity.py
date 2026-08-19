@@ -53,23 +53,63 @@ def test_denylist_does_not_overreach(mod, sub):
 
 
 @BOTH
-def test_within_is_a_prefix_check_not_a_string_prefix(mod):
+@pytest.mark.parametrize('fn', ['_within', '_within_exact'])
+def test_containment_is_a_path_check_not_a_string_prefix(mod, fn):
     """/a/proj-evil must not pass for being inside /a/proj."""
+    within, sep = getattr(mod, fn), os.sep
+    assert within(f'{sep}a{sep}proj', f'{sep}a{sep}proj') is True
+    assert within(f'{sep}a{sep}proj{sep}x', f'{sep}a{sep}proj') is True
+    assert within(f'{sep}a{sep}proj-evil', f'{sep}a{sep}proj') is False
+
+
+@BOTH
+def test_within_exact_does_not_fold_case(mod):
+    """Project-root reads must not widen containment by casing."""
     sep = os.sep
-    assert mod._within(f'{sep}a{sep}proj', f'{sep}a{sep}proj') is True
-    assert mod._within(f'{sep}a{sep}proj{sep}x', f'{sep}a{sep}proj') is True
-    assert mod._within(f'{sep}a{sep}proj-evil', f'{sep}a{sep}proj') is False
+    assert mod._within_exact(f'{sep}a{sep}PROJ{sep}x', f'{sep}a{sep}proj') is False
+    assert mod._within(f'{sep}a{sep}PROJ{sep}x', f'{sep}a{sep}proj') is True
 
 
-# ── 2. both builds must expose the same HTTP surface ───────────────────────
-def _routes(path):
-    return set(re.findall(r"p == '(/api/[a-z0-9-]+)'", path.read_text(encoding='utf-8')))
+# ── 2. both builds must expose the same HTTP surface, per method ───────────
+# Per method, not per file: a route that moved from POST to DELETE, or exists
+# under only one verb, is real drift that a whole-file set comparison hides.
+_ROUTE = re.compile(r"""p\s*(?:==|\.startswith\()\s*['"](/api/[^'"]+)""")
+
+
+def _routes_by_method(path):
+    src = path.read_text(encoding='utf-8')
+    marks = [(m.group(1), m.start()) for m in re.finditer(r'def (do_[A-Z]+)\(self\)', src)]
+    assert marks, f'no do_* handlers found in {path}'
+    out = {}
+    for i, (method, start) in enumerate(marks):
+        end = marks[i + 1][1] if i + 1 < len(marks) else len(src)
+        out[method] = set(_ROUTE.findall(src[start:end]))
+    return out
 
 
 def test_route_parity():
-    mac, win = _routes(MAC_SRC), _routes(WIN_SRC)
-    assert mac, 'route regex matched nothing — did the dispatch style change?'
-    assert mac == win, f'only mac: {mac - win} | only win: {win - mac}'
+    mac, win = _routes_by_method(MAC_SRC), _routes_by_method(WIN_SRC)
+    assert set(mac) == set(win), f'handler methods differ: {set(mac) ^ set(win)}'
+    for method in sorted(mac):
+        assert mac[method], f'{method} matched no routes — did the dispatch style change?'
+        assert mac[method] == win[method], (
+            f'{method}: only mac {mac[method] - win[method]} | '
+            f'only win {win[method] - mac[method]}')
+
+
+# ── 2b. the credential denylist itself must not lose entries in a port ─────
+# `.config/gh` and `.config/gcloud` existed on macOS and were dropped when the
+# Windows tree was created; a casing test cannot catch a missing entry.
+PLATFORM_NEUTRAL = {
+    '.ssh', '.aws', '.gnupg', '.gpg', '.kube', '.docker', '.netrc',
+    '.password-store', '.config/gh', '.config/gcloud',
+}
+
+
+@BOTH
+def test_denylist_keeps_the_platform_neutral_entries(mod):
+    have = {s.replace(os.sep, '/') for s in mod.SENSITIVE_SUBPATHS}
+    assert PLATFORM_NEUTRAL <= have, f'dropped: {PLATFORM_NEUTRAL - have}'
 
 
 # ── 3. both builds must accept the same config shape ───────────────────────

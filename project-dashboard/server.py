@@ -116,6 +116,19 @@ def _within(child, parent):
     return c == p or c.startswith(p + os.path.normcase(os.sep))
 
 
+def _within_exact(child, parent):
+    """Like _within(), but case-SENSITIVE.
+
+    Used where `parent` is a directory name the user chose rather than $HOME:
+    both paths are already realpath()'d and `child` is built by joining onto
+    `parent`, so their casing always agrees on a legitimate read. Folding there
+    would only ever widen containment — on a case-sensitive volume it would let
+    a sibling that differs from the project root by casing alone read as inside
+    it. Kept identical between the two trees; see tests/test_parity.py.
+    """
+    return child == parent or child.startswith(parent + os.sep)
+
+
 def _is_sensitive_path(rp, home):
     """True if realpath `rp` is, or is inside, a known credential/secret dir."""
     for sub in SENSITIVE_SUBPATHS:
@@ -919,7 +932,7 @@ class Store:
         # sibling like  /a/proj-evil  can't pass for being inside  /a/proj
         base = os.path.realpath(proj['path'])
         full = os.path.realpath(os.path.join(base, rel))
-        if not _within(full, base):
+        if not _within_exact(full, base):
             return None
         # only ever serve the code/text files we actually index — never raw
         # secrets like id_rsa / .env that might sit inside an added folder
@@ -950,7 +963,7 @@ class Store:
             # confine to the project root — realpath blocks a manifest/README
             # symlink that points outside the project (or outside $HOME)
             full = os.path.realpath(os.path.join(base, name))
-            if not _within(full, base):
+            if not _within_exact(full, base):
                 return None
             try:
                 with open(full, errors='ignore') as fh:
