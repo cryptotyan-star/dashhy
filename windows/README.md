@@ -62,6 +62,14 @@ No accounts, no cloud, no telemetry.
 - **Light & dark** themes (remembered between sessions).
 - **Auto-refresh** when the window regains focus, so the dashboard always reflects reality (the heavier rescan is throttled).
 
+### Settings (⚙, bottom of the left rail — 4th button)
+- **New project** — where new folders land, the folder name, the starter template, the onboarding prompt.
+- **Launch** — default editor (VS Code / Cursor / system), terminal (**Windows Terminal / cmd / PowerShell**), a default run command.
+- **Scanning** — auto-refresh on focus on/off + interval, and **watched folders** auto-scanned for projects on startup.
+- **Storage** — move where `projects.json` lives (`config.json` always stays in `%LOCALAPPDATA%\Dashhy`).
+- **Start with Windows** — add/remove Dashhy from autostart (a `HKCU\…\Run` registry entry).
+- **GitHub** — sign-up / open links (repo import coming later).
+
 ### Native, but light
 - Opens in a **real window** (Microsoft Edge WebView2 via pywebview) — no browser chrome, no tabs, no address bar. Window size & position are remembered.
 - A **browser fallback** (`python server.py`) needs *zero* dependencies — pure Python standard library.
@@ -188,6 +196,14 @@ Full details and the audit summary are in **[SECURITY.md](SECURITY.md)**.
 - **Поиск** по имени/пути, **сортировка** (недавние / имя / размер), **фильтры** по статусу в сайдбаре.
 - **Светлая и тёмная** темы (запоминаются).
 - **Авто-обновление** при возврате фокуса в окно (тяжёлый рескан троттлится).
+
+**Настройки (⚙ — 4-я кнопка на левом рейле)**
+- **Новый проект** — откуда стартуют папки, имя папки, болванка-шаблон, команда онбординга.
+- **Запуск** — редактор по умолчанию (VS Code / Cursor / системный), терминал (**Windows Terminal / cmd / PowerShell**), команда запуска по умолчанию.
+- **Сканирование** — авто-обновление при фокусе (вкл/выкл + интервал) и **папки для авто-поиска** проектов при старте.
+- **Хранилище** — сменить папку, где лежит `projects.json` (`config.json` всегда рядом с приложением в `%LOCALAPPDATA%\Dashhy`).
+- **Запускать при старте Windows** — добавить/убрать из автозагрузки (запись в реестре `HKCU\…\Run`).
+- **GitHub** — ссылки регистрации / открыть GitHub (импорт репозиториев — позже).
 
 **Нативно, но легко**
 - Открывается в **настоящем окне** (Microsoft Edge WebView2 через pywebview) — без вкладок и адресной строки; размер и позиция запоминаются.

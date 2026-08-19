@@ -23,7 +23,7 @@ import time
 import webbrowser
 import urllib.request
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 # ── Paths / config ────────────────────────────────────────────
 # When frozen by PyInstaller the bundled data lives in sys._MEIPASS, not next
@@ -36,6 +36,9 @@ WEB_DIR   = os.path.join(HERE, "web")
 DATA_DIR  = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Dashhy')
 DATA_FILE = os.path.join(DATA_DIR, "projects.json")
 PORT      = int(os.environ.get("DASH_PORT", "7777"))
+# A GUI-subsystem .exe (console=False) pops a fresh console window every time
+# it spawns a console app (git, powershell, cmd) unless we suppress it.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 CODE_EXT = {
     '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.c', '.cpp',
@@ -80,7 +83,7 @@ COPY_IGNORE = shutil.ignore_patterns(
 SENSITIVE_SUBPATHS = tuple(p.replace('/', os.sep) for p in (
     '.ssh', '.aws', '.gnupg', '.gpg', '.kube', '.docker', '.netrc',
     '.password-store',
-    'AppData/Roaming/gh', 'AppData/Roaming/gcloud', 'AppData/Local/gcloud',
+    'AppData/Roaming/GitHub CLI', 'AppData/Roaming/gcloud', 'AppData/Local/gcloud',
     'AppData/Roaming/Microsoft/Credentials', 'AppData/Local/Microsoft/Credentials',
     'AppData/Local/Dashhy',
 ))
@@ -125,6 +128,150 @@ def _dir_inode(path):
         return None
 
 
+# ── App config (settings screen) ──────────────────────────────
+# Single JSON file next to projects.json in %LOCALAPPDATA%\Dashhy. Everything
+# the settings screen edits lives here.
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+
+DEFAULT_CONFIG = {
+    "new_project": {
+        "base_dir":    os.path.expanduser("~/Desktop"),          # where new folders land
+        "name":        NEW_PROJ_NAME,                            # base name for new folders
+        "starter_dir": os.path.expanduser("~/Desktop/project-starter"),
+        "onboard":     "/onboard",                               # prompt injected into VS Code task
+    },
+    "launch": {
+        "editor":          "auto",       # auto | code | cursor | system
+        "terminal":        "wt",         # wt | cmd | powershell
+        "default_run_cmd": "",           # applied when a project has no run_cmd of its own
+    },
+    "scan": {
+        "auto_on_focus": True,
+        "interval_sec":  45,             # 0 = never rescan on focus
+        "watched": [],                   # folders auto-discovered on load
+    },
+    "storage": {
+        "data_dir": DATA_DIR,            # where projects.json lives (movable)
+    },
+    "startup": {
+        "launch_at_login": False,        # reflected from the HKCU Run key on read
+    },
+}
+
+_EDITORS     = {"auto", "code", "cursor", "system"}
+_TERMINALS   = {"wt", "cmd", "powershell"}
+_config_lock = threading.Lock()
+
+
+def _deep_merge(base, over):
+    out = dict(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _load_config():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, encoding='utf-8') as f:
+                return _deep_merge(DEFAULT_CONFIG, json.load(f) or {})
+    except Exception as e:
+        print(f"[config] load failed: {e}", file=sys.stderr)
+    return _deep_merge(DEFAULT_CONFIG, {})
+
+
+def _save_config(cfg):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding='utf-8') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, CONFIG_FILE)
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except OSError:
+        pass
+
+
+CONFIG = _load_config()
+
+
+def _validate_dir(path):
+    """Real, existing dir under $HOME and not a credential dir → realpath, else None."""
+    if not path:
+        return None
+    rp = os.path.realpath(os.path.expanduser(str(path)))
+    home = os.path.realpath(os.path.expanduser('~'))
+    if not os.path.isdir(rp):
+        return None
+    if not _within(rp, home):
+        return None
+    if _is_sensitive_path(rp, home):
+        return None
+    return rp
+
+
+def _need_dir(path):
+    d = _validate_dir(path)
+    if not d:
+        raise ValueError(f"Недопустимая папка: {path}")
+    return d
+
+
+def _clean_name(name):
+    n = re.sub(r'[/\\:*?"<>|]', '', str(name)).strip() or NEW_PROJ_NAME
+    return n[:80]
+
+
+# ── "Запускать при старте компьютера" — HKCU Run key ──────────
+_RUN_KEY   = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_RUN_VALUE = "Dashhy"
+
+
+def _login_command():
+    """The command string stored in the Run key.
+
+    Frozen .exe: run the executable directly (it IS the app). Run-from-source:
+    launch the native window via pythonw.exe (no console flash) + app.py.
+    """
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    appdir = os.path.dirname(os.path.abspath(__file__))
+    apppy = os.path.join(appdir, "app.py")
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    py = pyw if os.path.exists(pyw) else sys.executable
+    return f'"{py}" "{apppy}"'
+
+
+def login_item_enabled():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
+            winreg.QueryValueEx(k, _RUN_VALUE)
+        return True
+    except Exception:
+        return False
+
+
+def set_login_item(enabled):
+    """Add/remove the HKCU\\...\\Run value so Dashhy starts at login."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
+            if enabled:
+                winreg.SetValueEx(k, _RUN_VALUE, 0, winreg.REG_SZ, _login_command())
+            else:
+                try:
+                    winreg.DeleteValue(k, _RUN_VALUE)
+                except FileNotFoundError:
+                    pass
+    except Exception as e:
+        print(f"[login-item] {e}", file=sys.stderr)
+    return login_item_enabled()
+
+
 # ── Data store ────────────────────────────────────────────────
 class Store:
     def __init__(self):
@@ -132,15 +279,18 @@ class Store:
         self.projects = {}
         self._home_index = None        # cached deep-relocate candidate list
         self._home_index_at = 0.0
+        # registry location is configurable (settings ▸ storage); default = DATA_DIR
+        self.data_dir = CONFIG.get('storage', {}).get('data_dir') or DATA_DIR
+        self.data_file = os.path.join(self.data_dir, 'projects.json')
         try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            if os.path.exists(DATA_FILE):
-                with open(DATA_FILE) as f:
+            os.makedirs(self.data_dir, exist_ok=True)
+            if os.path.exists(self.data_file):
+                with open(self.data_file) as f:
                     for item in json.load(f):
                         self.projects[item['id']] = self._migrate(item)
                 # one-time safety snapshot per launch — recover a clobbered registry
                 try:
-                    shutil.copy2(DATA_FILE, DATA_FILE + ".bak")
+                    shutil.copy2(self.data_file, self.data_file + ".bak")
                 except Exception:
                     pass
         except Exception as e:
@@ -165,17 +315,49 @@ class Store:
         return item
 
     def save(self):
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp = DATA_FILE + ".tmp"
+        os.makedirs(self.data_dir, exist_ok=True)
+        tmp = self.data_file + ".tmp"
         with open(tmp, 'w') as f:
             json.dump(list(self.projects.values()), f, indent=2)
-        os.replace(tmp, DATA_FILE)
+        os.replace(tmp, self.data_file)
         try:
             # best-effort: on POSIX this restricts to owner-only; on Windows
             # os.chmod only maps to the read-only attribute, which this clears.
-            os.chmod(DATA_FILE, 0o600)
+            os.chmod(self.data_file, 0o600)
         except OSError:
             pass
+
+    def set_data_dir(self, new_dir):
+        """Move the projects registry to a new folder (settings ▸ storage).
+
+        Copies projects.json to the new dir (leaving the old copy as a backup),
+        rebinds this store, and persists the choice into CONFIG.
+        """
+        rp = _need_dir(new_dir)
+        new_file = os.path.join(rp, 'projects.json')
+        with self.lock:
+            if os.path.normcase(os.path.realpath(new_file)) != os.path.normcase(os.path.realpath(self.data_file)):
+                try:
+                    if os.path.exists(self.data_file):
+                        shutil.copy2(self.data_file, new_file)
+                except Exception as e:
+                    raise ValueError(f"Не удалось перенести данные: {e}")
+            self.data_dir = rp
+            self.data_file = new_file
+        self.save()
+        CONFIG['storage']['data_dir'] = rp
+        _save_config(CONFIG)
+        return rp
+
+    def discover_watched(self):
+        """Run discover() over every watched folder (settings ▸ scan)."""
+        added = []
+        for folder in (CONFIG.get('scan', {}).get('watched') or []):
+            try:
+                added += self.discover(folder)
+            except Exception as e:
+                print(f"[watched] {folder}: {e}", file=sys.stderr)
+        return added
 
     def list(self):
         return list(self.projects.values())
@@ -534,6 +716,7 @@ class Store:
             out = subprocess.run(
                 ['git', '-C', base, 'status', '--porcelain=2', '--branch'],
                 capture_output=True, text=True, timeout=5,
+                creationflags=_NO_WINDOW,
             )
             if out.returncode != 0:
                 return None
@@ -556,7 +739,8 @@ class Store:
         try:
             lg = subprocess.run(
                 ['git', '-C', base, 'log', '-1', '--format=%s%x1f%cr'],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, timeout=5,
+                creationflags=_NO_WINDOW)
             if lg.returncode == 0 and '\x1f' in lg.stdout:
                 msg, rel = lg.stdout.strip().split('\x1f', 1)
         except Exception:
@@ -637,7 +821,8 @@ class Store:
         """
         vs = os.path.join(dest, '.vscode')
         os.makedirs(vs, exist_ok=True)
-        link = "vscode://anthropic.claude-code/open?prompt=%2Fonboard"
+        prompt = CONFIG.get('new_project', {}).get('onboard') or '/onboard'
+        link = "vscode://anthropic.claude-code/open?prompt=" + quote(prompt, safe='')
         task = {
             "version": "2.0.0",
             "tasks": [{
@@ -663,16 +848,19 @@ class Store:
         up in the grid. Returns (project, dest_path). Raises ValueError with a
         user-facing (Russian) message on any expected failure.
         """
-        src = os.path.realpath(STARTER_DIR)
+        np = CONFIG.get('new_project', {})
+        starter = os.path.expanduser(np.get('starter_dir') or STARTER_DIR)
+        src = os.path.realpath(starter)
         if not os.path.isdir(src):
-            raise ValueError(f"Болванка не найдена: {STARTER_DIR}")
+            raise ValueError(f"Болванка не найдена: {starter}")
         home = os.path.realpath(os.path.expanduser('~'))
-        parent = os.path.realpath(NEW_PROJ_BASE)
+        parent = os.path.realpath(os.path.expanduser(np.get('base_dir') or NEW_PROJ_BASE))
+        base_name = np.get('name') or NEW_PROJ_NAME
         # never overwrite an existing folder — "new project", "new project 2", …
-        dest = os.path.join(parent, NEW_PROJ_NAME)
+        dest = os.path.join(parent, base_name)
         n = 2
         while os.path.exists(dest):
-            dest = os.path.join(parent, f"{NEW_PROJ_NAME} {n}")
+            dest = os.path.join(parent, f"{base_name} {n}")
             n += 1
         rp = os.path.realpath(dest)
         if not _within(rp, home) or _is_sensitive_path(rp, home):
@@ -884,6 +1072,7 @@ def pick_folder():
         out = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
             capture_output=True, text=True, timeout=120,
+            creationflags=_NO_WINDOW,
         )
         path = out.stdout.strip()
         return path if path else None
@@ -900,26 +1089,38 @@ def reveal_in_explorer(path):
         return False
 
 
-def open_terminal(path, cmd=None):
+def open_terminal(path, cmd=None, app="wt"):
     """Open a new terminal at `path`; optionally run `cmd` there (user's own
-    command).
+    command). `app` (settings ▸ launch) picks Windows Terminal / PowerShell /
+    cmd.
 
-    Prefers Windows Terminal (`wt`, the Windows 11 default app, always on
-    PATH via an App Execution Alias) opened at `path`. If `wt` isn't
-    available, falls back to a throwaway .bat file opened with os.startfile
-    — letting Explorer's own .bat file association spawn the console window
-    sidesteps cmd.exe's finicky inline quoting for `/k "...&&..."`.
+    Windows Terminal (`wt`, the Windows 11 default, on PATH via an App
+    Execution Alias) opens at `path`. PowerShell opens a persistent window at
+    `path`. Any other case — or a failure of the above — falls back to a
+    throwaway .bat opened with os.startfile: letting Explorer's own .bat
+    association spawn the console sidesteps cmd.exe's finicky inline quoting.
     """
-    wt = shutil.which('wt')
-    if wt:
-        args = [wt, '-d', path]
-        if cmd:
-            args += ['cmd', '/k', cmd]
+    if app == "powershell":
         try:
-            subprocess.Popen(args)
+            ps = f"Set-Location -LiteralPath '{path}'"
+            if cmd:
+                ps += f"; {cmd}"
+            subprocess.Popen(['powershell', '-NoExit', '-NoProfile', '-Command', ps])
             return True
         except Exception:
             pass
+    elif app == "wt":
+        wt = shutil.which('wt')
+        if wt:
+            args = [wt, '-d', path]
+            if cmd:
+                args += ['cmd', '/k', cmd]
+            try:
+                subprocess.Popen(args)
+                return True
+            except Exception:
+                pass
+    # app == "cmd", or any of the above was unavailable/failed
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         bat = os.path.join(DATA_DIR, f"_run_{uuid.uuid4().hex[:8]}.bat")
@@ -946,7 +1147,7 @@ def _run_launcher(exe, extra_args):
     batch files — fixes that; a real `.exe` just runs as-is.
     """
     cmd = ['cmd', '/c', exe, *extra_args] if exe.lower().endswith(('.cmd', '.bat')) else [exe, *extra_args]
-    return subprocess.run(cmd, capture_output=True, check=False)
+    return subprocess.run(cmd, capture_output=True, check=False, creationflags=_NO_WINDOW)
 
 
 def open_in_vscode(path):
@@ -969,9 +1170,15 @@ def open_in_vscode(path):
     return reveal_in_explorer(path)
 
 
-def open_in_editor(path):
-    """Try VS Code, then Cursor, then fall back to File Explorer."""
-    for name in ('code', 'cursor'):
+def open_in_editor(path, pref="auto"):
+    """Open `path` in the preferred editor (settings ▸ launch).
+
+    pref: "code" | "cursor" | "system" (Explorer) | "auto" (VS Code → Cursor).
+    """
+    if pref == "system":
+        return reveal_in_explorer(path)
+    order = {"code": ["code"], "cursor": ["cursor"]}.get(pref, ["code", "cursor"])
+    for name in order:
         exe = shutil.which(name)
         if not exe:
             continue
@@ -982,6 +1189,79 @@ def open_in_editor(path):
         except Exception:
             continue
     return reveal_in_explorer(path)
+
+
+def open_url(url):
+    """Open an external https URL — allowlisted to github.com (settings ▸ GitHub)."""
+    try:
+        u = urlparse(url)
+        if u.scheme not in ('http', 'https'):
+            return False
+        if (u.hostname or '').lower() not in ('github.com', 'www.github.com'):
+            return False
+        os.startfile(url)
+        return True
+    except Exception:
+        return False
+
+
+def _config_payload():
+    """Full current config for the UI — with live-computed fields folded in."""
+    cfg = json.loads(json.dumps(_deep_merge(DEFAULT_CONFIG, CONFIG)))
+    cfg['startup']['launch_at_login'] = login_item_enabled()
+    cfg['storage']['data_dir'] = STORE.data_dir
+    return cfg
+
+
+def apply_config_patch(patch):
+    """Validate + merge a partial config from the settings screen; run side effects."""
+    global CONFIG
+    if not isinstance(patch, dict):
+        raise ValueError("bad config")
+    with _config_lock:
+        new = _deep_merge(CONFIG, {})
+
+        np = patch.get('new_project') or {}
+        if 'base_dir' in np:    new['new_project']['base_dir'] = _need_dir(np['base_dir'])
+        if 'starter_dir' in np: new['new_project']['starter_dir'] = _need_dir(np['starter_dir'])
+        if 'name' in np:        new['new_project']['name'] = _clean_name(np['name'])
+        if 'onboard' in np:     new['new_project']['onboard'] = str(np['onboard'])[:200]
+
+        lc = patch.get('launch') or {}
+        if 'editor' in lc:
+            new['launch']['editor'] = lc['editor'] if lc['editor'] in _EDITORS else 'auto'
+        if 'terminal' in lc:
+            new['launch']['terminal'] = lc['terminal'] if lc['terminal'] in _TERMINALS else 'wt'
+        if 'default_run_cmd' in lc:
+            new['launch']['default_run_cmd'] = str(lc['default_run_cmd'])[:300]
+
+        sc = patch.get('scan') or {}
+        if 'auto_on_focus' in sc:
+            new['scan']['auto_on_focus'] = bool(sc['auto_on_focus'])
+        if 'interval_sec' in sc:
+            try:
+                iv = int(sc['interval_sec'])
+            except (TypeError, ValueError):
+                iv = 45
+            new['scan']['interval_sec'] = min(3600, max(0, iv))
+        if 'watched' in sc:
+            folders = []
+            for f in (sc['watched'] or [])[:50]:
+                d = _validate_dir(f)
+                if d and d not in folders:
+                    folders.append(d)
+            new['scan']['watched'] = folders
+
+        CONFIG = new
+        _save_config(CONFIG)
+
+    st = patch.get('storage') or {}
+    if st.get('data_dir'):
+        STORE.set_data_dir(st['data_dir'])
+    su = patch.get('startup') or {}
+    if 'launch_at_login' in su:
+        set_login_item(bool(su['launch_at_login']))
+    return _config_payload()
 
 
 # ── HTTP handler ──────────────────────────────────────────────
@@ -1069,6 +1349,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         p = u.path
         if p == '/api/projects':
             return self._json({'projects': STORE.list()})
+        if p == '/api/config':
+            return self._json({'config': _config_payload()})
         if p == '/api/files':
             q = parse_qs(u.query)
             return self._json({'files': STORE.file_tree(q.get('id', [''])[0])})
@@ -1121,7 +1403,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             proj = next((x for x in STORE.list() if x['id'] == body.get('id')), None)
             if not proj:
                 return self._json({'error': 'not found'}, 404)
-            ok = (open_in_editor if body.get('editor') else reveal_in_explorer)(proj['path'])
+            if body.get('editor'):
+                ok = open_in_editor(proj['path'], CONFIG.get('launch', {}).get('editor', 'auto'))
+            else:
+                ok = reveal_in_explorer(proj['path'])
             return self._json({'ok': ok})
         if p == '/api/notes':
             proj = STORE.set_notes(body.get('id'), body.get('notes'))
@@ -1135,8 +1420,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             proj = next((x for x in STORE.list() if x['id'] == body.get('id')), None)
             if not proj:
                 return self._json({'error': 'not found'}, 404)
-            cmd = proj.get('run_cmd') if body.get('run') else None
-            ok = open_terminal(proj['path'], cmd)
+            lc = CONFIG.get('launch', {})
+            cmd = (proj.get('run_cmd') or lc.get('default_run_cmd')) if body.get('run') else None
+            ok = open_terminal(proj['path'], cmd, lc.get('terminal', 'wt'))
             return self._json({'ok': ok})
         if p == '/api/discover':
             added = STORE.discover(body.get('path'))
@@ -1151,6 +1437,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json({'error': 'Не удалось создать проект'}, 500)
             opened = open_in_vscode(dest)
             return self._json({'project': proj, 'path': dest, 'opened': opened})
+        if p == '/api/config':
+            try:
+                cfg = apply_config_patch(body)
+            except ValueError as e:
+                return self._json({'error': str(e)}, 400)
+            except Exception as e:
+                print(f"[config] {e}", file=sys.stderr)
+                return self._json({'error': 'Не удалось сохранить настройки'}, 500)
+            return self._json({'config': cfg})
+        if p == '/api/discover-watched':
+            return self._json({'added': STORE.discover_watched()})
+        if p == '/api/open-url':
+            return self._json({'ok': open_url(body.get('url', ''))})
         return self._json({'error': 'unknown route'}, 404)
 
     def do_DELETE(self):
