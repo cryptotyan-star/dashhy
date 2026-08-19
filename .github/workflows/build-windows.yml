@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# The "windows" release is mutable, so two runs must never publish at once.
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -24,7 +29,8 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller "pywebview>=5.0,<7.0"
+          # Pinned: an unpinned build makes two "same" releases unreproducible.
+          python -m pip install "pyinstaller==6.22.2" "pywebview==6.2.1"
 
       - name: Assemble source package
         shell: pwsh
@@ -70,23 +76,47 @@ jobs:
         with:
           name: dashhy-windows-build
           path: out/*.zip
-          retention-days: 14
+          retention-days: 90
+
+      # Assets are republished under fixed names, so a checksum file is the
+      # only way for someone holding a zip to tell which build it came from.
+      - name: Checksums and build manifest
+        shell: pwsh
+        run: |
+          python -m pip freeze > out/build-manifest.txt
+          Get-FileHash out/*.zip -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding ascii out/SHA256SUMS.txt
+          Get-Content out/SHA256SUMS.txt
 
       # Only main publishes. A workflow_dispatch on a branch still builds and
       # smoke-tests the exe, which is how a change gets verified before merge —
       # it just must not overwrite the public "windows" release while doing so.
       - name: Publish release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/windows-v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: windows
-          name: "Dashhy for Windows"
+          # main keeps the rolling "windows" tag, so the download URL people
+          # already have stays valid. Dispatching this workflow on a
+          # `windows-v*` tag publishes that tag instead, as a release that is
+          # never rewritten. target_commitish makes the tag point at the commit
+          # actually built — without it GitHub created "windows" on whatever the
+          # default branch happened to be, and it stayed there for six weeks.
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'windows' }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Dashhy for Windows {0}', github.ref_name) || 'Dashhy for Windows' }}
           body: |
             Автосборка Windows-версии Dashhy (собрано на `windows-latest` в GitHub Actions).
 
             - **dashhy-windows-ready.zip** — распакуй, запусти `Install Dashhy.bat`. Появится ярлык на рабочем столе, Dashhy запустится. Python не нужен.
             - **dashhy-windows-source.zip** — исходники + `build_app.bat`, для тех, кто хочет собрать сам.
 
-            Собрано автоматически из `${{ github.ref_name }}`, коммит ${{ github.sha }}.
+            - **SHA256SUMS.txt** — контрольные суммы обоих архивов.
+
+            Собрано из `${{ github.ref_name }}`, коммит `${{ github.sha }}`.
+            Лог сборки: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Перед публикацией `.exe` прошёл self-test: сервер поднялся и ответил на `/`, `/api/projects`, `/api/config`.
-          files: out/*.zip
+          files: |
+            out/*.zip
+            out/SHA256SUMS.txt
+            out/build-manifest.txt

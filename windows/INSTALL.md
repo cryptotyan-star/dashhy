@@ -10,6 +10,23 @@ somewhere permanent, drops a shortcut on your Desktop, and launches it.
 > распакуй, дважды кликни **`Install Dashhy.bat`**. Появится ярлык на рабочем
 > столе, Dashhy запустится сам.
 
+**The binary is not code-signed**, so Windows will show a *"Windows protected
+your PC"* (SmartScreen) popup — click **"More info" → "Run anyway"**. Because it
+is unsigned, check what you downloaded against `SHA256SUMS.txt` from the same
+release before running it:
+
+```powershell
+Get-FileHash .\dashhy-windows-ready.zip -Algorithm SHA256
+```
+
+Every release also names the exact commit it was built from and links its build
+log, so you can see what went into the binary.
+
+> 🇷🇺 **Бинарь не подписан** — Windows покажет SmartScreen («Windows protected
+> your PC»), жми **"More info" → "Run anyway"**. Именно поэтому сверь скачанное
+> с `SHA256SUMS.txt` из того же релиза командой выше. В описании релиза указан
+> коммит сборки и ссылка на лог — видно, из чего собран бинарь.
+
 Everything below is for building/running from **source** instead (useful if
 you want to modify the code, or the prebuilt `.exe` doesn't work for you).
 Dashhy runs on **Windows 11** (Windows 10 works too, see the requirements
