@@ -134,7 +134,7 @@ Dashhy is built to stay on your machine:
 
 - **Loopback only.** The server binds `127.0.0.1` (ports `7777`–`7796`). It is not reachable from your network.
 - **Anti-CSRF / anti-DNS-rebinding.** Every request's `Host` and `Origin` are checked against loopback, so a random web page in your browser can't drive the API.
-- **Filesystem guards.** Folders you add must live under your user profile; known credential directories (`~\.ssh`, `~\.aws`, `~\.gnupg`, `~\AppData\Roaming\gh`, `~\AppData\Roaming\Microsoft\Credentials`, …) are refused, path-traversal is blocked, and the file viewer only ever serves recognised **code/text** files — never raw secrets.
+- **Filesystem guards.** Folders you add must live under your user profile; known credential directories (`~\.ssh`, `~\.aws`, `~\.gnupg`, `~\AppData\Roaming\GitHub CLI`, `~\AppData\Roaming\Microsoft\Credentials`, …) are refused, path-traversal is blocked, and the file viewer only ever serves recognised **code/text** files — never raw secrets.
 - **No network, no telemetry.** The backend is the Python standard library only. The single external command it runs is your local `git` (read-only, offline) for branch/status.
 - **Private registry.** Your project list lives in `%LOCALAPPDATA%\Dashhy\projects.json`, written atomically.
 

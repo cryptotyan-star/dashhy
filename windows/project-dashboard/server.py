@@ -82,7 +82,7 @@ COPY_IGNORE = shutil.ignore_patterns(
 # on both POSIX and Windows.
 SENSITIVE_SUBPATHS = tuple(p.replace('/', os.sep) for p in (
     '.ssh', '.aws', '.gnupg', '.gpg', '.kube', '.docker', '.netrc',
-    '.password-store',
+    '.password-store', '.config/gh', '.config/gcloud',
     'AppData/Roaming/GitHub CLI', 'AppData/Roaming/gcloud', 'AppData/Local/gcloud',
     'AppData/Roaming/Microsoft/Credentials', 'AppData/Local/Microsoft/Credentials',
     'AppData/Local/Dashhy',
@@ -90,18 +90,27 @@ SENSITIVE_SUBPATHS = tuple(p.replace('/', os.sep) for p in (
 
 
 def _within(child, parent):
-    """True if realpath `child` equals or is inside realpath `parent`.
+    """True if realpath `child` is, or is inside, realpath `parent`.
 
-    Uses os.path.normcase() for the comparison — a no-op on POSIX, but on
-    Windows it case-folds and normalizes slashes. NTFS is case-insensitive
-    (though case-preserving), so a plain `==`/`startswith` comparison here
-    would wrongly reject a folder whose casing doesn't byte-for-byte match
-    %USERPROFILE% (e.g. a path picked via the WinForms folder dialog, which
-    reflects Explorer's on-disk casing, can differ from the environment
-    variable's casing) — every project-add would fail with "invalid path".
+    Case-insensitive on purpose, because both platforms' default filesystems
+    are: on APFS/HFS+ ~/.ssh and ~/.SSH are the same directory, and NTFS is
+    case-insensitive (though case-preserving). A byte-exact comparison here
+    would let ~/.SSH walk straight past the credential denylist below, and
+    would also reject a perfectly valid folder whose casing came back from the
+    OS folder picker differently from $HOME / %USERPROFILE%.
+
+    normcase() alone is not enough: it case-folds on Windows but is a no-op on
+    POSIX, so it would silently do nothing on macOS — and would make this
+    module behave differently when imported on a POSIX CI runner. casefold()
+    alone is not enough either: only normcase() normalises Windows' mixed
+    slashes. Both, in that order, are correct on both platforms.
+
+    Kept byte-identical between the macOS and Windows trees on purpose; see
+    tests/test_parity.py.
     """
-    nchild, nparent = os.path.normcase(child), os.path.normcase(parent)
-    return nchild == nparent or nchild.startswith(nparent + os.path.normcase(os.sep))
+    c = os.path.normcase(child).casefold()
+    p = os.path.normcase(parent).casefold()
+    return c == p or c.startswith(p + os.path.normcase(os.sep))
 
 
 def _is_sensitive_path(rp, home):
@@ -1146,8 +1155,28 @@ def _run_launcher(exe, extra_args):
     WinError 193. Routing through `cmd /c` — which does know how to run
     batch files — fixes that; a real `.exe` just runs as-is.
     """
-    cmd = ['cmd', '/c', exe, *extra_args] if exe.lower().endswith(('.cmd', '.bat')) else [exe, *extra_args]
-    return subprocess.run(cmd, capture_output=True, check=False, creationflags=_NO_WINDOW)
+    if not exe.lower().endswith(('.cmd', '.bat')):
+        return subprocess.run([exe, *extra_args], capture_output=True,
+                              check=False, creationflags=_NO_WINDOW)
+
+    # cmd.exe re-parses its own command line, and & | ^ < > ( ) are operators
+    # to it while being perfectly legal in NTFS names — an unquoted project path
+    # like  C:\dev\my&calc  would run the tail as a second command. Quote every
+    # token ourselves and hand cmd a STRING: passing a list would let
+    # subprocess.list2cmdline() re-join it, and that only quotes arguments
+    # containing spaces (and backslash-escapes any quotes we added), which
+    # reopens the same hole for exactly the paths that need it most.
+    # Anything inside double quotes is literal to cmd. The leading `call` also
+    # keeps cmd's "/C strips the outer pair of quotes" rule from firing.
+    parts = [exe, *extra_args]
+    if any(ch in a for a in parts for ch in '"%!'):
+        # `"` can't occur in an NTFS name; % and ! would still be expanded as
+        # variables inside quotes. Report failure so the caller falls back to
+        # opening the folder in Explorer instead.
+        return subprocess.CompletedProcess(parts, 1)
+    line = 'cmd /c call ' + ' '.join(f'"{a}"' for a in parts)
+    return subprocess.run(line, capture_output=True, check=False,
+                          creationflags=_NO_WINDOW)
 
 
 def open_in_vscode(path):
@@ -1502,8 +1531,56 @@ def start_server(host="127.0.0.1", port=PORT):
     return httpd, actual_port
 
 
+def run_selftest(port):
+    """Headless check that this build actually serves the dashboard.
+
+    Used by CI (`server.py --selftest`) and by the packaged binary
+    (`Dashhy --selftest`), where there is no desktop session to show a window
+    in. Writes its report to $DASHHY_SELFTEST_OUT when set — the release binary
+    is built for the GUI subsystem, so its stdout goes nowhere.
+    """
+    import urllib.request
+
+    lines, ok = [], True
+    checks = (('/', '<title>Dashhy</title>'),
+              ('/api/projects', '"projects"'),
+              ('/api/config', '"launch"'))
+    for path, needle in checks:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=15) as r:
+                body = r.read(8192).decode('utf-8', 'replace')
+            good = r.status == 200 and needle in body
+            detail = f"status={r.status}"
+        except Exception as e:
+            good, detail = False, repr(e)
+        ok = ok and good
+        lines.append(f"[selftest] {path:15} {'OK' if good else 'FAIL'}  {detail}")
+
+    lines.append(f"[selftest] port={port} result={'PASS' if ok else 'FAIL'}")
+    report = "\n".join(lines)
+    print(report, file=sys.stderr)
+    out = os.environ.get('DASHHY_SELFTEST_OUT')
+    if out:
+        try:
+            with open(out, 'w', encoding='utf-8') as f:
+                f.write(report + "\n")
+        except Exception:
+            pass
+    return ok
+
+
 def main():
     os.chdir(HERE)
+
+    if '--selftest' in sys.argv:
+        httpd, port = start_server()
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        ok = run_selftest(port)
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        sys.exit(0 if ok else 1)
 
     # Already running? Just open the browser to it — no second server, no error.
     if _is_our_dashboard(PORT):

@@ -38,6 +38,7 @@ def _save_state(state):
         pass
 
 
+
 def main():
     try:
         httpd, port = server.start_server()
@@ -47,6 +48,14 @@ def main():
 
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
+
+    if '--selftest' in sys.argv or os.environ.get('DASHHY_SELFTEST') == '1':
+        ok = server.run_selftest(port)
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        sys.exit(0 if ok else 1)
 
     saved = _load_state()
     state = {'width': saved.get('width', 1400), 'height': saved.get('height', 900)}
