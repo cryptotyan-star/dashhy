@@ -3,7 +3,7 @@ name: Build Windows exe
 on:
   workflow_dispatch: {}
   push:
-    branches: [ windows-port ]
+    branches: [ main ]
     paths:
       - 'windows/**'
       - '.github/workflows/build-windows.yml'
@@ -38,6 +38,24 @@ jobs:
         working-directory: windows/project-dashboard
         run: pyinstaller --noconfirm Dashhy.spec
 
+      # Prove the packaged binary actually serves the dashboard before it is
+      # published. --selftest starts the bundled server, hits /, /api/projects
+      # and /api/config, then exits — no window, so it works on a runner with
+      # no desktop session. The exe is a GUI-subsystem binary with no stdout,
+      # hence the report file.
+      - name: Smoke-test Dashhy.exe
+        shell: pwsh
+        env:
+          DASHHY_SELFTEST_OUT: ${{ github.workspace }}\selftest.txt
+        run: |
+          $exe = "windows/project-dashboard/dist/Dashhy.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList '--selftest' -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "Dashhy.exe --selftest timed out" }
+          $p.Refresh()   # -PassThru without -Wait can leave ExitCode unpopulated
+          if (Test-Path selftest.txt) { Get-Content selftest.txt } else { throw "no selftest report was written" }
+          if ($p.ExitCode -ne 0) { throw "Dashhy.exe --selftest failed (exit $($p.ExitCode))" }
+          Write-Host "Dashhy.exe self-test passed"
+
       - name: Assemble ready-to-run package
         shell: pwsh
         run: |
@@ -54,7 +72,11 @@ jobs:
           path: out/*.zip
           retention-days: 14
 
+      # Only main publishes. A workflow_dispatch on a branch still builds and
+      # smoke-tests the exe, which is how a change gets verified before merge —
+      # it just must not overwrite the public "windows" release while doing so.
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: windows
@@ -65,5 +87,6 @@ jobs:
             - **dashhy-windows-ready.zip** — распакуй, запусти `Install Dashhy.bat`. Появится ярлык на рабочем столе, Dashhy запустится. Python не нужен.
             - **dashhy-windows-source.zip** — исходники + `build_app.bat`, для тех, кто хочет собрать сам.
 
-            Собрано автоматически из ветки `windows-port`, коммит ${{ github.sha }}.
+            Собрано автоматически из `${{ github.ref_name }}`, коммит ${{ github.sha }}.
+            Перед публикацией `.exe` прошёл self-test: сервер поднялся и ответил на `/`, `/api/projects`, `/api/config`.
           files: out/*.zip

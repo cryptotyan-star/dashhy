@@ -92,11 +92,34 @@ SENSITIVE_SUBPATHS = (
 )
 
 
+def _within(child, parent):
+    """True if realpath `child` is, or is inside, realpath `parent`.
+
+    Case-insensitive on purpose, because both platforms' default filesystems
+    are: on APFS/HFS+ ~/.ssh and ~/.SSH are the same directory, and NTFS is
+    case-insensitive (though case-preserving). A byte-exact comparison here
+    would let ~/.SSH walk straight past the credential denylist below, and
+    would also reject a perfectly valid folder whose casing came back from the
+    OS folder picker differently from $HOME / %USERPROFILE%.
+
+    normcase() alone is not enough: it case-folds on Windows but is a no-op on
+    POSIX, so it would silently do nothing on macOS — and would make this
+    module behave differently when imported on a POSIX CI runner. casefold()
+    alone is not enough either: only normcase() normalises Windows' mixed
+    slashes. Both, in that order, are correct on both platforms.
+
+    Kept byte-identical between the macOS and Windows trees on purpose; see
+    tests/test_parity.py.
+    """
+    c = os.path.normcase(child).casefold()
+    p = os.path.normcase(parent).casefold()
+    return c == p or c.startswith(p + os.path.normcase(os.sep))
+
+
 def _is_sensitive_path(rp, home):
     """True if realpath `rp` is, or is inside, a known credential/secret dir."""
     for sub in SENSITIVE_SUBPATHS:
-        b = os.path.join(home, sub)
-        if rp == b or rp.startswith(b + os.sep):
+        if _within(rp, os.path.join(home, sub)):
             return True
     return False
 
@@ -196,7 +219,7 @@ def _validate_dir(path):
     home = os.path.realpath(os.path.expanduser('~'))
     if not os.path.isdir(rp):
         return None
-    if not (rp == home or rp.startswith(home + os.sep)):
+    if not _within(rp, home):
         return None
     if _is_sensitive_path(rp, home):
         return None
@@ -331,7 +354,7 @@ class Store:
         rp = _need_dir(new_dir)
         new_file = os.path.join(rp, 'projects.json')
         with self.lock:
-            if os.path.realpath(new_file) != os.path.realpath(self.data_file):
+            if os.path.realpath(new_file).casefold() != os.path.realpath(self.data_file).casefold():
                 try:
                     if os.path.exists(self.data_file):
                         shutil.copy2(self.data_file, new_file)
@@ -483,7 +506,7 @@ class Store:
         # collect untracked candidate dirs across all searched roots (deduped)
         cands, seen = [], set()
         for root in roots:
-            if not root or not (root == home or root.startswith(home + os.sep)):
+            if not root or not _within(root, home):
                 continue
             try:
                 with os.scandir(root) as it:
@@ -766,7 +789,7 @@ class Store:
         """
         root = os.path.realpath(root or '')
         home = os.path.realpath(os.path.expanduser('~'))
-        if not root or not (root == home or root.startswith(home + os.sep)) \
+        if not root or not _within(root, home) \
                 or _is_sensitive_path(root, home):
             return []
         markers = ('.git', 'package.json', 'pyproject.toml', 'requirements.txt',
@@ -851,10 +874,10 @@ class Store:
             dest = os.path.join(parent, f"{base_name} {n}")
             n += 1
         rp = os.path.realpath(dest)
-        if not (rp == home or rp.startswith(home + os.sep)) or _is_sensitive_path(rp, home):
+        if not _within(rp, home) or _is_sensitive_path(rp, home):
             raise ValueError("Недопустимый путь назначения")
         # guard against cloning the template into itself
-        if rp == src or rp.startswith(src + os.sep):
+        if _within(rp, src):
             raise ValueError("Нельзя создать проект внутри болванки")
         shutil.copytree(src, dest, ignore=COPY_IGNORE, symlinks=False)
         self._write_vscode_task(dest)
@@ -896,7 +919,7 @@ class Store:
         # sibling like  /a/proj-evil  can't pass for being inside  /a/proj
         base = os.path.realpath(proj['path'])
         full = os.path.realpath(os.path.join(base, rel))
-        if full != base and not full.startswith(base + os.sep):
+        if not _within(full, base):
             return None
         # only ever serve the code/text files we actually index — never raw
         # secrets like id_rsa / .env that might sit inside an added folder
@@ -927,7 +950,7 @@ class Store:
             # confine to the project root — realpath blocks a manifest/README
             # symlink that points outside the project (or outside $HOME)
             full = os.path.realpath(os.path.join(base, name))
-            if full != base and not full.startswith(base + os.sep):
+            if not _within(full, base):
                 return None
             try:
                 with open(full, errors='ignore') as fh:
@@ -1340,7 +1363,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             #  deny known secret dirs and refuse to read non-code files.)
             rp = os.path.realpath(path) if path else ''
             home = os.path.realpath(os.path.expanduser('~'))
-            inside_home = bool(rp) and (rp == home or rp.startswith(home + os.sep))
+            inside_home = bool(rp) and _within(rp, home)
             if not path or not os.path.isdir(rp) or not inside_home \
                     or _is_sensitive_path(rp, home):
                 return self._json({'error': 'invalid path'}, 400)
@@ -1459,8 +1482,56 @@ def start_server(host="127.0.0.1", port=PORT):
     return httpd, actual_port
 
 
+def run_selftest(port):
+    """Headless check that this build actually serves the dashboard.
+
+    Used by CI (`server.py --selftest`) and by the packaged binary
+    (`Dashhy --selftest`), where there is no desktop session to show a window
+    in. Writes its report to $DASHHY_SELFTEST_OUT when set — the release binary
+    is built for the GUI subsystem, so its stdout goes nowhere.
+    """
+    import urllib.request
+
+    lines, ok = [], True
+    checks = (('/', '<title>Dashhy</title>'),
+              ('/api/projects', '"projects"'),
+              ('/api/config', '"launch"'))
+    for path, needle in checks:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=15) as r:
+                body = r.read(8192).decode('utf-8', 'replace')
+            good = r.status == 200 and needle in body
+            detail = f"status={r.status}"
+        except Exception as e:
+            good, detail = False, repr(e)
+        ok = ok and good
+        lines.append(f"[selftest] {path:15} {'OK' if good else 'FAIL'}  {detail}")
+
+    lines.append(f"[selftest] port={port} result={'PASS' if ok else 'FAIL'}")
+    report = "\n".join(lines)
+    print(report, file=sys.stderr)
+    out = os.environ.get('DASHHY_SELFTEST_OUT')
+    if out:
+        try:
+            with open(out, 'w', encoding='utf-8') as f:
+                f.write(report + "\n")
+        except Exception:
+            pass
+    return ok
+
+
 def main():
     os.chdir(HERE)
+
+    if '--selftest' in sys.argv:
+        httpd, port = start_server()
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        ok = run_selftest(port)
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        sys.exit(0 if ok else 1)
 
     # Already running? Just open the browser to it — no second server, no error.
     if _is_our_dashboard(PORT):
