@@ -113,6 +113,19 @@ def _within(child, parent):
     return c == p or c.startswith(p + os.path.normcase(os.sep))
 
 
+def _within_exact(child, parent):
+    """Like _within(), but case-SENSITIVE.
+
+    Used where `parent` is a directory name the user chose rather than $HOME:
+    both paths are already realpath()'d and `child` is built by joining onto
+    `parent`, so their casing always agrees on a legitimate read. Folding there
+    would only ever widen containment — on a case-sensitive volume it would let
+    a sibling that differs from the project root by casing alone read as inside
+    it. Kept identical between the two trees; see tests/test_parity.py.
+    """
+    return child == parent or child.startswith(parent + os.sep)
+
+
 def _is_sensitive_path(rp, home):
     """True if realpath `rp` is, or is inside, a known credential/secret dir."""
     for sub in SENSITIVE_SUBPATHS:
@@ -917,7 +930,7 @@ class Store:
         # sibling like  /a/proj-evil  can't pass for being inside  /a/proj
         base = os.path.realpath(proj['path'])
         full = os.path.realpath(os.path.join(base, rel))
-        if not _within(full, base):
+        if not _within_exact(full, base):
             return None
         # only ever serve the code/text files we actually index — never raw
         # secrets like id_rsa / .env that might sit inside an added folder
@@ -948,7 +961,7 @@ class Store:
             # confine to the project root — realpath blocks a manifest/README
             # symlink that points outside the project (or outside $HOME)
             full = os.path.realpath(os.path.join(base, name))
-            if not _within(full, base):
+            if not _within_exact(full, base):
                 return None
             try:
                 with open(full, errors='ignore') as fh:
@@ -1169,12 +1182,19 @@ def _run_launcher(exe, extra_args):
     # Anything inside double quotes is literal to cmd. The leading `call` also
     # keeps cmd's "/C strips the outer pair of quotes" rule from firing.
     parts = [exe, *extra_args]
-    if any(ch in a for a in parts for ch in '"%!'):
-        # `"` can't occur in an NTFS name; % and ! would still be expanded as
-        # variables inside quotes. Report failure so the caller falls back to
-        # opening the folder in Explorer instead.
+    if any(ch in a for a in parts for ch in '"%'):
+        # `"` can't occur in an NTFS name, and %VAR% is expanded even inside
+        # quotes. Report failure so the caller falls back to Explorer.
         return subprocess.CompletedProcess(parts, 1)
-    line = 'cmd /c call ' + ' '.join(f'"{a}"' for a in parts)
+    # /S: take everything between the outermost pair of quotes verbatim, which
+    # is the only documented way to pass several quoted arguments through cmd
+    # without its "strip the first and last quote on the line" rule mangling
+    # them. `call` would work for that too but re-parses its remainder and
+    # doubles carets that a quoted argument never un-doubles, so a project at
+    # C:\dev\a^b would silently open C:\dev\a^^b and still report success.
+    # /V:OFF pins delayed expansion off, so `!` in a folder name stays literal
+    # even under a machine that turns it on via the Command Processor AutoRun.
+    line = 'cmd /v:off /s /c "' + ' '.join(f'"{a}"' for a in parts) + '"'
     return subprocess.run(line, capture_output=True, check=False,
                           creationflags=_NO_WINDOW)
 
