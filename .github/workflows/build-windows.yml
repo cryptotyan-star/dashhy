@@ -105,6 +105,16 @@ jobs:
       # Only main publishes. A workflow_dispatch on a branch still builds and
       # smoke-tests the exe, which is how a change gets verified before merge —
       # it just must not overwrite the public "windows" release while doing so.
+      # target_commitish only decides where a tag is created; GitHub will not
+      # move one that already exists, whatever the release object then says its
+      # target is. So the rolling "windows" tag froze at the first release and
+      # stayed there while six weeks of assets shipped under it — and froze
+      # again one commit after the release object was "fixed". The only thing
+      # that actually moves it is a force push, so do that, before publishing.
+      - name: Point the rolling tag at this build
+        if: github.ref == 'refs/heads/main'
+        run: git push --force origin ${{ github.sha }}:refs/tags/windows
+
       - name: Publish release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/windows-v')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
@@ -127,6 +137,8 @@ jobs:
             - **SHA256SUMS.txt** — контрольные суммы обоих архивов.
 
             Собрано из `${{ github.ref_name }}`, коммит `${{ github.sha }}`.
+            Тег `windows` — катящийся: он переезжает на каждую сборку. Если нужна
+            ссылка, которая никогда не изменится, бери релиз с тегом `windows-v*`.
             Лог сборки: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Перед публикацией `.exe` прошёл self-test: сервер поднялся и ответил на `/`, `/api/projects`, `/api/config`.
           files: |
