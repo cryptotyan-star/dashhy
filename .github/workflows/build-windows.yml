@@ -117,7 +117,7 @@ jobs:
           # default branch happened to be, and it stayed there for six weeks.
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'windows' }}
           target_commitish: ${{ github.sha }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Dashhy for Windows {0}', github.ref_name) || 'Dashhy for Windows' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Dashhy {0}', github.ref_name) || 'Dashhy for Windows' }}
           body: |
             Автосборка Windows-версии Dashhy (собрано на `windows-latest` в GitHub Actions).
 
