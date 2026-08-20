@@ -129,6 +129,18 @@ def _within_exact(child, parent):
     return child == parent or child.startswith(parent + os.sep)
 
 
+def _samefile_path(a, b):
+    """True if two paths name the same file, comparing the way the OS does.
+
+    Kept byte-identical between the two trees: normcase() normalises Windows'
+    slashes and casing, casefold() covers case-insensitive APFS where normcase
+    is a no-op. See tests/test_parity.py.
+    """
+    na = os.path.normcase(os.path.realpath(a)).casefold()
+    nb = os.path.normcase(os.path.realpath(b)).casefold()
+    return na == nb
+
+
 def _is_sensitive_path(rp, home):
     """True if realpath `rp` is, or is inside, a known credential/secret dir."""
     for sub in SENSITIVE_SUBPATHS:
@@ -274,6 +286,15 @@ def login_item_enabled():
 
 def set_login_item(enabled):
     """Write/remove the LaunchAgent plist and (best-effort) (un)load it now."""
+    if enabled and not getattr(sys, "frozen", False):
+        # _login_launch_args() would bake in whichever interpreter happens to be
+        # running — a Homebrew python3 and a checkout path — and the LaunchAgent
+        # would then start that at every login. It happened once, on 2026-07-12,
+        # and had to be unpicked by hand.
+        raise ValueError(
+            "Автозапуск можно включить только из установленного Dashhy.app, "
+            "а не из запуска через python3."
+        )
     try:
         if enabled:
             os.makedirs(LAUNCH_AGENT_DIR, exist_ok=True)
@@ -367,7 +388,7 @@ class Store:
         rp = _need_dir(new_dir)
         new_file = os.path.join(rp, 'projects.json')
         with self.lock:
-            if os.path.realpath(new_file).casefold() != os.path.realpath(self.data_file).casefold():
+            if not _samefile_path(new_file, self.data_file):
                 try:
                     if os.path.exists(self.data_file):
                         shutil.copy2(self.data_file, new_file)
@@ -934,6 +955,13 @@ class Store:
         full = os.path.realpath(os.path.join(base, rel))
         if not _within_exact(full, base):
             return None
+        # Defence in depth: the denylist stops you ADDING ~/.ssh as a project,
+        # but nothing stopped reading THROUGH a parent — a project rooted at
+        # $HOME served ~/.config/gh/hosts.yml quite happily, since .yml is in
+        # CODE_EXT. The comment above SENSITIVE_SUBPATHS calls that list the
+        # real boundary, so it has to hold on the read path too.
+        if _is_sensitive_path(full, os.path.realpath(os.path.expanduser('~'))):
+            return None
         # only ever serve the code/text files we actually index — never raw
         # secrets like id_rsa / .env that might sit inside an added folder
         if os.path.splitext(full)[1].lower() not in CODE_EXT:
@@ -964,6 +992,8 @@ class Store:
             # symlink that points outside the project (or outside $HOME)
             full = os.path.realpath(os.path.join(base, name))
             if not _within_exact(full, base):
+                return None
+            if _is_sensitive_path(full, os.path.realpath(os.path.expanduser('~'))):
                 return None
             try:
                 with open(full, errors='ignore') as fh:

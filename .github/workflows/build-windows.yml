@@ -3,13 +3,23 @@ name: Build Windows exe
 on:
   workflow_dispatch: {}
   push:
+    # No paths filter here on purpose. GitHub evaluates `paths` against the
+    # commits contained in the push, and a tag push carries none — with a filter
+    # present, `git push origin windows-v1.0.0` would silently run nothing,
+    # which is exactly the failure mode this workflow already had once. The cost
+    # is ~90 s of runner time on a main push that did not touch windows/.
     branches: [ main ]
+    tags: [ 'windows-v*' ]
+  # PRs build and smoke-test the exe but never publish — the Publish step is
+  # gated on the ref. Until now a change to windows/ was only ever compiled
+  # after it had been merged.
+  pull_request:
     paths:
       - 'windows/**'
       - '.github/workflows/build-windows.yml'
 
-permissions:
-  contents: write
+# Nothing here needs write except the publish step; the job asks for it.
+permissions: {}
 
 # The "windows" release is mutable, so two runs must never publish at once.
 concurrency:
@@ -19,10 +29,13 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
 
@@ -72,7 +85,7 @@ jobs:
           Copy-Item windows/README.md, windows/INSTALL.md, windows/SECURITY.md, windows/LICENSE, windows/THIRD_PARTY_NOTICES.md $ready/
           Compress-Archive -Path "$ready/*" -DestinationPath "out/dashhy-windows-ready.zip" -Force
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5
         with:
           name: dashhy-windows-build
           path: out/*.zip
@@ -94,7 +107,7 @@ jobs:
       # it just must not overwrite the public "windows" release while doing so.
       - name: Publish release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/windows-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           # main keeps the rolling "windows" tag, so the download URL people
           # already have stays valid. Dispatching this workflow on a
