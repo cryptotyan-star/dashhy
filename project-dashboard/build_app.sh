@@ -21,16 +21,23 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SRC"
+
+# --no-install: build and sign into dist/ but skip installing to ~/Applications
+# and skip lsregister. CI uses this to prove the bundle builds and its server
+# answers, without writing into a home directory it does not own.
+NO_INSTALL=0
+[ "${1:-}" = "--no-install" ] && NO_INSTALL=1
 APP_NAME="Dashhy"
 DEST="$HOME/Applications/$APP_NAME.app"
 SITE="$HOME/Library/Python/3.9/lib/python/site-packages"
+PY_BIN="${PYTHON:-/usr/bin/python3}"          # CI sets PYTHON to the runner's interpreter
 PB=/usr/libexec/PlistBuddy
 
 export PYTHONPATH="$SITE"
 
 echo "→ PyInstaller сборка…"
 rm -rf build dist "$APP_NAME.spec"
-/usr/bin/python3 -m PyInstaller \
+"$PY_BIN" -m PyInstaller \
   --noconfirm --windowed \
   --name "$APP_NAME" \
   --icon AppIcon.icns \
@@ -54,6 +61,11 @@ $PB -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PL" 2>/d
 
 echo "→ Подпись (ad-hoc)…"
 codesign --force --deep --sign - "$BUILT" >/dev/null 2>&1 || echo "  (codesign пропущен)"
+
+if [ "$NO_INSTALL" = "1" ]; then
+  echo "✓ Собрано: $BUILT  (--no-install: пропускаю ~/Applications и lsregister)"
+  exit 0
+fi
 
 echo "→ Установка в ~/Applications…"
 rm -rf "$DEST"

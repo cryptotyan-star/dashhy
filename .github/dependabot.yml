@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # The actions are pinned by commit SHA, which is what keeps a re-tagged
+  # third-party action from silently gaining write access to this repo and to
+  # the release every Windows user downloads. Pinning only works if something
+  # moves the pins, so:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5

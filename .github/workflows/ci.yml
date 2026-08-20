@@ -15,10 +15,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ macos-latest, windows-latest ]
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
 
@@ -43,3 +44,33 @@ jobs:
       - name: Server self-test (Windows tree)
         if: runner.os == 'Windows'
         run: python windows/project-dashboard/server.py --selftest
+
+      # The bug that started all of this was a macOS word left in the Windows
+      # UI. Scoped to web/ on purpose: the .py files legitimately discuss macOS
+      # in comments. Case-sensitive, so the internal `data-act="finder"` id is
+      # not confused with the Finder app.
+      - name: No macOS wording in the Windows UI
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ! grep -rnE 'macOS|MacOS|Terminal\.app|iTerm|Finder|LaunchAgent|Powerbox|⌘' \
+              windows/project-dashboard/web
+
+  # Neither the macOS .app nor app.py was ever built or run by CI — only the
+  # Windows exe was. This builds the real bundle and makes its server answer.
+  macos-bundle:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pyinstaller pywebview
+      - name: Build Dashhy.app
+        env:
+          PYTHON: python
+        run: bash project-dashboard/build_app.sh --no-install
+      - name: Bundle self-test
+        run: |
+          ./project-dashboard/dist/Dashhy.app/Contents/MacOS/Dashhy --selftest
