@@ -85,7 +85,7 @@ jobs:
           Copy-Item windows/README.md, windows/INSTALL.md, windows/SECURITY.md, windows/LICENSE, windows/THIRD_PARTY_NOTICES.md $ready/
           Compress-Archive -Path "$ready/*" -DestinationPath "out/dashhy-windows-ready.zip" -Force
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dashhy-windows-build
           path: out/*.zip
