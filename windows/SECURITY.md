@@ -27,7 +27,7 @@ threat model, the protections in place, and the result of a pre-release audit.
 | **Symlink safety** | The scanner never follows symlinks out of the tree; manifest/README reads are confined to the project root. |
 | **No network / telemetry** | Backend is the Python standard library only. The one external command is local, read-only `git`. |
 | **Private registry** | `%LOCALAPPDATA%\Dashhy\projects.json` is written atomically; `chmod`-equivalent applied (clears the read-only attribute — Windows has no POSIX-mode owner-only ACL via `os.chmod`). |
-| **Command execution** | "Run" and "Open Terminal" launch *your own* command in *your own* terminal (Windows Terminal, or a throwaway `.bat`); `subprocess` is called with argument lists and never `shell=True`. The one exception is VS Code / Cursor, whose CLI ships as a `.cmd` batch launcher that `CreateProcess` cannot start: those go through `cmd /c call` with every token quoted by us, and paths containing `"`, `%` or `!` are refused rather than passed on. |
+| **Command execution** | "Run" and "Open Terminal" launch *your own* command in *your own* terminal (Windows Terminal, or a throwaway `.bat`); `subprocess` is called with argument lists and never `shell=True`. The one exception is VS Code / Cursor, whose CLI ships as a `.cmd` batch launcher that `CreateProcess` cannot start: those go through `cmd /v:off /s /c` with every token quoted by us. `/S` makes cmd take the quoted line verbatim instead of re-parsing it, and `/V:OFF` pins delayed expansion off so `!` in a folder name stays literal; paths containing `"` or `%` cannot be quoted safely and are refused rather than passed on. |
 
 ## Pre-release audit
 
@@ -56,14 +56,25 @@ rather than assumed. Where the two builds necessarily differ:
 
 | Area | macOS | Windows |
 |------|-------|---------|
-| Path comparison | `_within()` via `str.casefold()` (APFS is case-insensitive) | `_within()` via `os.path.normcase()` (NTFS is case-insensitive) |
-| Credential paths | `~/.config/gh`, `~/Library/Keychains`, … | the same `.config` entries plus `%APPDATA%\GitHub CLI`, `%APPDATA%\Microsoft\Credentials`, … |
-| Editor launch | `open -na` with an argv list | `cmd /c call` with tokens quoted by us (see the table above) |
+| Credential paths | `~/.config/gh`, `~/.config/gcloud`, `~/Library/Keychains`, … | the same `.config` entries plus `%APPDATA%\GitHub CLI`, `%APPDATA%\Microsoft\Credentials`, … |
+| Editor launch | `open -na` with an argv list | `cmd /v:off /s /c` with tokens quoted by us (see the table above) |
+| Terminal | Terminal.app / iTerm | Windows Terminal / cmd / PowerShell |
 | Autostart | per-user LaunchAgent plist | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
+| Data dir | `~/Library/Application Support/Dashhy` | `%LOCALAPPDATA%\Dashhy` |
 
-`tests/test_parity.py` pins the parts that must not drift: the credential
-denylist must reject mixed-case paths on both builds, and both must expose the
-same HTTP routes and the same config keys. CI runs it on macOS and Windows.
+Everything else that matters is **shared, not merely similar**: `_within()`,
+`_within_exact()`, `_samefile_path()` and `_is_sensitive_path()` are
+byte-identical in both trees (`os.path.normcase(...).casefold()`, correct on
+both filesystems), as are the read-path denylist check and the refusal to enable
+autostart from a non-frozen run.
+
+`tests/test_parity.py` is what keeps that true rather than aspirational. It
+compares the four helpers' source byte for byte, asserts the credential denylist
+rejects mixed-case paths and keeps its platform-neutral entries, asserts both
+builds expose the same HTTP routes per verb and the same config keys, and checks
+that a credential path inside an added project is refused on the read path. CI
+runs it on macOS and Windows; `tests/test_windows_launcher.py` additionally
+exercises the cmd quoting against a real `cmd.exe`.
 
 ## Reporting a vulnerability
 

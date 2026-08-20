@@ -22,7 +22,10 @@ threat model, the protections in place, and the result of a pre-release audit.
 | **CSRF / DNS-rebinding** | Every request's `Host` must be loopback, and any `Origin` must be loopback — blocks cross-site `fetch` and rebinding. |
 | **Path traversal** | File reads are confined with `realpath` + separator-aware prefix checks; `..` escapes are rejected. |
 | **Home confinement** | Folders you add must resolve under `$HOME`. |
-| **Credential denylist** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.gpg`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.password-store`, `~/.config/gh`, `~/.config/gcloud`, `~/Library/Keychains` are refused for add/discover. |
+| **Credential denylist** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.gpg`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.password-store`, `~/.config/gh`, `~/.config/gcloud`, `~/Library/Keychains` are refused for add/discover — and, since Aug 2026, on the **read** path too, so a project rooted at `$HOME` cannot serve a file out of one of them. Comparison is case-insensitive: APFS treats `~/.SSH` and `~/.ssh` as the same directory. |
+| **Settings** (`/api/config`) | Every path in the settings screen goes through the same `$HOME` + denylist validation as an added project. `config.json` lives in `~/Library/Application Support/Dashhy` and is `chmod 600`. Editor, terminal and scan interval are coerced to a fixed set of values. |
+| **Opening links** (`/api/open-url`) | Allowlisted to `github.com` / `www.github.com` over http(s); anything else is refused. |
+| **Autostart** | Enabling launch-at-login is refused unless Dashhy is running as the built `.app` — otherwise the LaunchAgent would be written pointing at whichever interpreter happened to toggle it. |
 | **Code-only reads** | The file viewer serves only recognised code/text extensions — never raw secrets like `id_rsa` or `.env`. |
 | **Symlink safety** | The scanner never follows symlinks out of the tree; manifest/README reads are confined to the project root. |
 | **No network / telemetry** | Backend is the Python standard library only. The one external command is local, read-only `git`. |

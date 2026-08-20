@@ -6,9 +6,11 @@ which also means this file runs on macOS *and* Windows: `winreg` is imported
 lazily inside the Windows functions, never at module scope.
 """
 import importlib.util
+import inspect
 import os
 import pathlib
 import re
+import sys
 
 import pytest
 
@@ -131,3 +133,60 @@ def test_config_key_parity():
 def test_editor_choices_are_shared(mod):
     """Terminals are legitimately platform-specific; editors are not."""
     assert mod._EDITORS == {'auto', 'code', 'cursor', 'system'}
+
+
+# ── 4. helpers that must stay byte-identical between the trees ─────────────
+# _within drifted once and the macOS side went 42 days with a bypassable
+# denylist. A casing test cannot see that; comparing the source can.
+SHARED_HELPERS = ['_within', '_within_exact', '_samefile_path', '_is_sensitive_path']
+
+
+@pytest.mark.parametrize('fn', SHARED_HELPERS)
+def test_shared_helpers_are_byte_identical(fn):
+    def grab(path):
+        src = path.read_text(encoding='utf-8')
+        m = re.search(rf'^def {fn}\(.*?(?=^def |\Z)', src, re.S | re.M)
+        assert m, f'{fn} not found in {path}'
+        return m.group(0)
+
+    assert grab(MAC_SRC) == grab(WIN_SRC), f'{fn} has drifted between the trees'
+
+
+# ── 5. the credential denylist must also hold on the read path ─────────────
+# Adding ~/.ssh as a project was already refused, but reading THROUGH a parent
+# was not: a project rooted at $HOME served ~/.config/gh/hosts.yml, a .yml and
+# therefore in CODE_EXT.
+@BOTH
+def test_read_file_refuses_a_credential_path_under_a_project(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, 'expanduser', lambda p: str(tmp_path) if p == '~' else p)
+    secret = tmp_path / '.config' / 'gh'
+    secret.mkdir(parents=True)
+    (secret / 'hosts.yml').write_text('oauth_token: ghp_TOPSECRET\n', encoding='utf-8')
+    (tmp_path / 'ok.py').write_text('print(1)\n', encoding='utf-8')
+
+    store = mod.Store.__new__(mod.Store)
+    store.lock = __import__('threading').Lock()
+    store.projects = {'p1': {'id': 'p1', 'path': str(tmp_path)}}
+
+    assert mod.Store.read_file(store, 'p1', 'ok.py') == 'print(1)\n'
+    assert mod.Store.read_file(store, 'p1', '.config/gh/hosts.yml') is None
+
+
+# ── 6. autostart must refuse to point at a dev interpreter ─────────────────
+@BOTH
+def test_set_login_item_refuses_when_not_frozen(mod):
+    assert not getattr(sys, 'frozen', False), 'the test runner is not a frozen build'
+    with pytest.raises(ValueError):
+        mod.set_login_item(True)
+
+
+@BOTH
+def test_set_login_item_disable_is_not_gated(mod):
+    """Turning it OFF must work from anywhere, or you cannot undo a bad state.
+
+    Asserted on the source rather than by calling it: the Windows path writes to
+    HKCU, which no amount of environment sandboxing can redirect, so actually
+    invoking it here would delete a real user's autostart entry.
+    """
+    src = inspect.getsource(mod.set_login_item)
+    assert 'if enabled and not getattr(sys, "frozen", False):' in src, src
